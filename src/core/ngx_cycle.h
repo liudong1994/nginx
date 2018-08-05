@@ -35,37 +35,84 @@ struct ngx_shm_zone_s {
 
 
 struct ngx_cycle_s {
+	/*
+		保存着所有模块存储配置项的结构体的指针
+		它首先是一个数组(*) 每个数组的成员又是一个指针(**) 这个指针又指向另一个存储着指针的数组(**) 因为会看到void****
+	*/
     void                  ****conf_ctx;
+	//内存池
     ngx_pool_t               *pool;
 
+	/*
+		日志模块中提供了生成基本ngx_log_t日志对象的功能 这里的log实际上是在还没有执行ngx_init_cycle方法前 也就是还没有解析配置前
+	如果有信息需要输出到日志 就会暂时使用log对象 它会输出到屏幕 在ngx_init_cycle方法执行后 将会根据nginx,conf配置文件中的配置项
+	构造出正确的日志文件 此时会对log重新赋值
+	*/
     ngx_log_t                *log;
+	/*
+		由nginx.conf配置文件读取到日志文件路径后 将开始初始化error_log日志文件 由于log对象还在用于输出日志到屏幕 
+	这时会用new_log对象暂时性地替代log日志 待初始化完成后 会用new_log的地址覆盖上面的log指针
+	*/
     ngx_log_t                 new_log;
 
+	/*
+		对于poll、rtsig这样的事件模块 会以有效文件句柄来预先建立这些ngx_connection_t结构体 以加速事件的收集、分发 
+	这时files就会保存所有ngx_connection_t的指针组成的数组 files_n(下面)就是指针的总数 而文件句柄的值用来访问files数组成员
+	*/
     ngx_connection_t        **files;
+	//可用连接池 与free_connection_n配合使用
     ngx_connection_t         *free_connections;
+	//可用连接池中的连接总数
     ngx_uint_t                free_connection_n;
 
+	//双向链表容器 元素类型时ngx_connection_t结构体 表示可重复使用连接队列
     ngx_queue_t               reusable_connections_queue;
 
+	//数组元素都是ngx_listening_t结构体 每个数组元素又代表Nginx服务器监听的一个端口
     ngx_array_t               listening;
+	/*
+		动态数组容器 它保存着Nginx所要操作的目录 如果有目录不存在 则会试图创建 而创建目录失败的话会导致Nginx启动失败
+	*/
     ngx_array_t               pathes;
+	/*
+		单链表容器 元素类型是ngx_open_file_t结构体 它表示Nginx已经打开的所有的文件 事实上 Nginx框架不会向open_files链表中
+	添加文件 而是由对此感兴趣的模块向其中添加文件路径名称 Nginx框架会在ngx_init_cycle方法中打开这些文件
+	*/
     ngx_list_t                open_files;
+	//单链表容器 元素的类型是ngx_shm_zone_t结构体 每个元素表示一块共享内存
     ngx_list_t                shared_memory;
 
+	//当前进程中所有连接对象的总数 与下面的connections配合使用
     ngx_uint_t                connection_n;
+	//与上面的files配合使用
     ngx_uint_t                files_n;
 
+	//当前进程的所有连接对象 与上面的connection_n配合使用
     ngx_connection_t         *connections;
+	//当前进程所有读事件对象 connection_n同时表示所有读事件的总数
     ngx_event_t              *read_events;
+	//当前进程所有写事件对象 connection_n同时表示所有写事件的总数
     ngx_event_t              *write_events;
 
+	/*
+		旧的ngx_cycle_t对象用于引用上一个ngx_cycle_t对象中的成员
+		例如：
+		ngx_init_cycle方法 在启动初期 需要建立一个临时的ngx_cycle_t对象保存一些变量 再调用ngx_init_cycle方法时可以把旧的ngx_cycle_t对象
+	传进去 而这时old_cycle对象就会保存这个前期的ngx_cycle_t对象
+	*/
     ngx_cycle_t              *old_cycle;
 
+	//配置文件相对于安装目录的路径名称
     ngx_str_t                 conf_file;
-    ngx_str_t                 conf_param;
+	//Nginx处理配置文件时需要特殊处理的在命令行携带的参数 一般是-g选项携带的参数
+	ngx_str_t                 conf_param;
+	//Nginx配置文件所在目录的路径
     ngx_str_t                 conf_prefix;
+	//Nginx安装目录的路径
     ngx_str_t                 prefix;
+	//用于进程间同步的文件锁名称
     ngx_str_t                 lock_file;
+	//使用gethostname系统调用获取的主机名
     ngx_str_t                 hostname;
 };
 

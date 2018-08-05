@@ -1718,18 +1718,20 @@ ngx_str_rbtree_insert_value(ngx_rbtree_node_t *temp,
         t = (ngx_str_node_t *) temp;
 
         if (node->key != temp->key) {
-
+            // 首先比较第一索引关键字key            
             p = (node->key < temp->key) ? &temp->left : &temp->right;
 
         } else if (n->str.len != t->str.len) {
-
+            // key值相等的情况下 进行第二索引关键字字符串比较 首先比较长度
             p = (n->str.len < t->str.len) ? &temp->left : &temp->right;
 
         } else {
+            // 第二索引关键字字符串的长度相等时 比较内容
             p = (ngx_memcmp(n->str.data, t->str.data, n->str.len) < 0)
                  ? &temp->left : &temp->right;
         }
 
+        // 当前节点是哨兵节点 跳出循环 准备插入操作
         if (*p == sentinel) {
             break;
         }

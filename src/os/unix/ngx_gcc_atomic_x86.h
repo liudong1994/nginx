@@ -15,10 +15,13 @@
 /*
  * "cmpxchgl  r, [m]":
  *
+ *     //如果eax寄存器中的值等于m
  *     if (eax == [m]) {
+ *         //将zf标志位设为1 将m值设为r
  *         zf = 1;
  *         [m] = r;
  *     } else {
+ *         //zf标志位设为0 将eax寄存器中的值设为m
  *         zf = 0;
  *         eax = [m];
  *     }
@@ -40,12 +43,17 @@ ngx_atomic_cmp_set(ngx_atomic_t *lock, ngx_atomic_uint_t old,
 {
     u_char  res;
 
+    //在C语言中嵌入汇编语言
     __asm__ volatile (
 
+    //多核架构下首先锁住总线
          NGX_SMP_LOCK
+    //将*lock的值与eax寄存器中的old相比较 如果相等 则置*lock的值为set
     "    cmpxchgl  %3, %1;   "
+    //cmpxchgl的比较若是相等 zf标志位1写入res变量 否则res为0
     "    sete      %0;       "
 
+    //  %0              %1          %2          %3
     : "=a" (res) : "m" (*lock), "a" (old), "r" (set) : "cc", "memory");
 
     return res;
@@ -105,9 +113,12 @@ ngx_atomic_fetch_add(ngx_atomic_t *value, ngx_atomic_int_t add)
 
     __asm__ volatile (
 
+    //首先锁住总线
          NGX_SMP_LOCK
+    //*value的值将会等于原先*value值与add值之和 而add为原*value值
     "    xaddl  %2, %1;   "
 
+    //      %1           %2            %3
     : "=a" (old) : "m" (*value), "a" (add) : "cc", "memory");
 
     return old;

@@ -413,12 +413,17 @@ ngx_trylock_fd(ngx_fd_t fd)
 {
     struct flock  fl;
 
+    //这个文件锁并不用于锁文件中的内容 填充为0
     fl.l_start = 0;
     fl.l_len = 0;
     fl.l_pid = 0;
     fl.l_type = F_WRLCK;
     fl.l_whence = SEEK_SET;
 
+    /*
+        F_SETLK意味着不会导致进程睡眠
+        获取fd对应的互斥锁 如果返回-1 则这时的ngx_errno将保存错误码
+    */
     if (fcntl(fd, F_SETLK, &fl) == -1) {
         return ngx_errno;
     }
@@ -454,6 +459,7 @@ ngx_unlock_fd(ngx_fd_t fd)
     fl.l_start = 0;
     fl.l_len = 0;
     fl.l_pid = 0;
+    //F_UNLCK表示将要释放锁
     fl.l_type = F_UNLCK;
     fl.l_whence = SEEK_SET;
 

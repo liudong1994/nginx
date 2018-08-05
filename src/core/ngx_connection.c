@@ -720,6 +720,7 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
 
     /* ngx_mutex_lock */
 
+	//从连接池中获取一个连接
     c = ngx_cycle->free_connections;
 
     if (c == NULL) {
@@ -737,6 +738,7 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
         return NULL;
     }
 
+    // c->data之前是作为单链表的下一个节点使用的 这里相当于free_connections指向最新的单链表头
     ngx_cycle->free_connections = c->data;
     ngx_cycle->free_connection_n--;
 
@@ -761,6 +763,7 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
     ngx_memzero(rev, sizeof(ngx_event_t));
     ngx_memzero(wev, sizeof(ngx_event_t));
 
+	//将instance标志位置为原来的相反值
     rev->instance = !instance;
     wev->instance = !instance;
 
@@ -781,6 +784,7 @@ ngx_free_connection(ngx_connection_t *c)
 {
     /* ngx_mutex_lock */
 
+    // 将释放的连接放在free_connections的头部
     c->data = ngx_cycle->free_connections;
     ngx_cycle->free_connections = c;
     ngx_cycle->free_connection_n++;
@@ -805,6 +809,7 @@ ngx_close_connection(ngx_connection_t *c)
         return;
     }
 
+    // 如果在定时器中 则从定时器中删除
     if (c->read->timer_set) {
         ngx_del_timer(c->read);
     }
@@ -813,6 +818,7 @@ ngx_close_connection(ngx_connection_t *c)
         ngx_del_timer(c->write);
     }
 
+    // 从事件驱动器中删除读写事件驱动 epoll删除
     if (ngx_del_conn) {
         ngx_del_conn(c, NGX_CLOSE_EVENT);
 
@@ -857,6 +863,7 @@ ngx_close_connection(ngx_connection_t *c)
 
 #else
 
+    // post队里删除
     if (c->read->prev) {
         ngx_delete_posted_event(c->read);
     }
@@ -879,6 +886,7 @@ ngx_close_connection(ngx_connection_t *c)
     fd = c->fd;
     c->fd = (ngx_socket_t) -1;
 
+    // close套接字
     if (ngx_close_socket(fd) == -1) {
 
         err = ngx_socket_errno;

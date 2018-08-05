@@ -23,7 +23,7 @@ io_submit(aio_context_t ctx, long n, struct iocb **paiocb)
     return syscall(SYS_io_submit, ctx, n, paiocb);
 }
 
-
+//提交一个异步I/O读取操作
 ssize_t
 ngx_file_aio_read(ngx_file_t *file, u_char *buf, size_t size, off_t offset,
     ngx_pool_t *pool)
@@ -84,6 +84,10 @@ ngx_file_aio_read(ngx_file_t *file, u_char *buf, size_t size, off_t offset,
 
     ngx_memzero(&aio->aiocb, sizeof(struct iocb));
 
+    /*
+        设置iocb结构体 这里的aiocb成员就是iocb类型
+        注意aio_data已经设置为这个ngx_event_t事件的指针 io_geteventsio_event对象中的data也是这个指针
+    */
     aio->aiocb.aio_data = (uint64_t) (uintptr_t) ev;
     aio->aiocb.aio_lio_opcode = IOCB_CMD_PREAD;
     aio->aiocb.aio_fildes = file->fd;
@@ -93,10 +97,16 @@ ngx_file_aio_read(ngx_file_t *file, u_char *buf, size_t size, off_t offset,
     aio->aiocb.aio_flags = IOCB_FLAG_RESFD;
     aio->aiocb.aio_resfd = ngx_eventfd;
 
+    /*
+        设置事件的回调方法为ngx_file_aio_event_handler 它的调用关系类似这样：
+        epoll_wait中调用ngx_epoll_eventfd_handler方法将当前事件放入到ngx_posted_events队列中
+        在延后执行的队列中调ngx_file_aio_event_handler方法
+    */
     ev->handler = ngx_file_aio_event_handler;
 
     piocb[0] = &aio->aiocb;
 
+    //调用io_submit向ngx_aio_ctx异步I/O上下文中添加一个事件 返回1表示成功
     if (io_submit(ngx_aio_ctx, 1, piocb) == 1) {
         ev->active = 1;
         ev->ready = 0;

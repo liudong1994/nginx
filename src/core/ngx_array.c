@@ -40,6 +40,7 @@ ngx_array_destroy(ngx_array_t *a)
 
     p = a->pool;
 
+	//这里只是移动内存池中的指针(其实 ngx_pnalloc也只是移动内存池中的指针...)
     if ((u_char *) a->elts + a->size * a->nalloc == p->d.last) {
         p->d.last -= a->size * a->nalloc;
     }
@@ -57,6 +58,7 @@ ngx_array_push(ngx_array_t *a)
     size_t       size;
     ngx_pool_t  *p;
 
+	//扩容
     if (a->nelts == a->nalloc) {
 
         /* the array is full */
@@ -73,12 +75,14 @@ ngx_array_push(ngx_array_t *a)
              * and there is space for new allocation
              */
 
+			//当前内存池空间足够 直接移动指针 获取需要的元素数量
             p->d.last += a->size;
             a->nalloc++;
 
         } else {
             /* allocate a new array */
 
+			//当前内存池空间不足 直接申请2倍的内存 将旧数据拷贝到新的缓冲区中
             new = ngx_palloc(p, 2 * size);
             if (new == NULL) {
                 return NULL;
@@ -121,12 +125,18 @@ ngx_array_push_n(ngx_array_t *a, ngx_uint_t n)
              * and there is space for new allocation
              */
 
+			//当前内存池空间足够 直接移动指针 获取需要的元素数量
             p->d.last += size;
             a->nalloc += n;
 
         } else {
             /* allocate a new array */
 
+			/*
+				当前内存池空间不足(当内存池不足时 都是申请2倍的内存 区别是到底是谁的两倍的问题)
+				如果新需要的容量比之前的总容量还要大的话 直接申请2*n的空间大小
+				如果新需要的容量比之前的总容量小的话 那就扩容之前总容量的一倍大小
+			*/
             nalloc = 2 * ((n >= a->nalloc) ? n : a->nalloc);
 
             new = ngx_palloc(p, nalloc * a->size);

@@ -150,6 +150,7 @@ ngx_http_header_out_t  ngx_http_headers_out[] = {
 };
 
 
+// 最后一个HTTP头部过滤模块
 static ngx_int_t
 ngx_http_header_filter(ngx_http_request_t *r)
 {
@@ -170,12 +171,14 @@ ngx_http_header_filter(ngx_http_request_t *r)
 #endif
     u_char                     addr[NGX_SOCKADDR_STRLEN];
 
+    // header_send表示已经发送过头部了 不需要再次发送了
     if (r->header_sent) {
         return NGX_OK;
     }
 
     r->header_sent = 1;
 
+    // 不是原始请求 不发送头部响应
     if (r != r->main) {
         return NGX_OK;
     }
@@ -198,6 +201,7 @@ ngx_http_header_filter(ngx_http_request_t *r)
         }
     }
 
+    // 根据headers_out结构体中的错误码 HTTP头部字符串 计算出把响应头部序列化需要的字节数
     len = sizeof("HTTP/1.x ") - 1 + sizeof(CRLF) - 1
           /* the end of the header */
           + sizeof(CRLF) - 1;
@@ -432,11 +436,13 @@ ngx_http_header_filter(ngx_http_request_t *r)
                + sizeof(CRLF) - 1;
     }
 
+    // 根据之前算出的len申请内存
     b = ngx_create_temp_buf(r->pool, len);
     if (b == NULL) {
         return NGX_ERROR;
     }
 
+    // 下面将响应行 头部数据 按照HTTP规范序列化的复制到缓冲区
     /* "HTTP/1.x " */
     b->last = ngx_cpymem(b->last, "HTTP/1.1 ", sizeof("HTTP/1.x ") - 1);
 
@@ -610,6 +616,7 @@ ngx_http_header_filter(ngx_http_request_t *r)
     out.buf = b;
     out.next = NULL;
 
+    // 将缓冲区(HTTP头部数据)作为参数 调用ngx_http_write_filter发送出去
     return ngx_http_write_filter(r, &out);
 }
 

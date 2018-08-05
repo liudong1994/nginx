@@ -54,22 +54,33 @@ ngx_uint_t            ngx_use_accept_mutex;
 ngx_uint_t            ngx_accept_events;
 ngx_uint_t            ngx_accept_mutex_held;
 ngx_msec_t            ngx_accept_mutex_delay;
-ngx_int_t             ngx_accept_disabled;
+ngx_int_t             ngx_accept_disabled;          //负载均衡实现相关
 ngx_file_t            ngx_accept_mutex_lock_file;
 
 
 #if (NGX_STAT_STUB)
 
+//已经建立成功过的TCP连接数
 ngx_atomic_t   ngx_stat_accepted0;
 ngx_atomic_t  *ngx_stat_accepted = &ngx_stat_accepted0;
+
+//连接建立成功且获取到ngx_connection_t结构体后 已经分配过内存池 并且在表示初始化了读/写事件后的连接数
 ngx_atomic_t   ngx_stat_handled0;
 ngx_atomic_t  *ngx_stat_handled = &ngx_stat_handled0;
+
+//已经由HTTP模块处理过的连接数
 ngx_atomic_t   ngx_stat_requests0;
 ngx_atomic_t  *ngx_stat_requests = &ngx_stat_requests0;
+
+//已经从ngx_cycle_t核心结构体的free_connections连接池中获取到ngx_connection_t对象的活跃连接数
 ngx_atomic_t   ngx_stat_active0;
 ngx_atomic_t  *ngx_stat_active = &ngx_stat_active0;
+
+//正在接收TCP流的连接数
 ngx_atomic_t   ngx_stat_reading0;
 ngx_atomic_t  *ngx_stat_reading = &ngx_stat_reading0;
+
+//正在发送TCP流的连接数
 ngx_atomic_t   ngx_stat_writing0;
 ngx_atomic_t  *ngx_stat_writing = &ngx_stat_writing0;
 
@@ -118,6 +129,10 @@ static ngx_str_t  event_core_name = ngx_string("event_core");
 
 static ngx_command_t  ngx_event_core_commands[] = {
 
+	/*
+		连接池的大小 也就是每个worker进程中支持的TCP最大连接数 
+		它与下面的connections配置项的意义是重复的
+	*/
     { ngx_string("worker_connections"),
       NGX_EVENT_CONF|NGX_CONF_TAKE1,
       ngx_event_connections,
@@ -125,6 +140,7 @@ static ngx_command_t  ngx_event_core_commands[] = {
       0,
       NULL },
 
+	//连接池的大小 与worker_connections配置项意义相同
     { ngx_string("connections"),
       NGX_EVENT_CONF|NGX_CONF_TAKE1,
       ngx_event_connections,
@@ -132,6 +148,7 @@ static ngx_command_t  ngx_event_core_commands[] = {
       0,
       NULL },
 
+	//确定选择哪一个事件模块作为事件驱动机制
     { ngx_string("use"),
       NGX_EVENT_CONF|NGX_CONF_TAKE1,
       ngx_event_use,
@@ -139,6 +156,10 @@ static ngx_command_t  ngx_event_core_commands[] = {
       0,
       NULL },
 
+	/*
+		对应于事件定义的available字段
+		对于epoll事件驱动模式来说 意味着在接收到一个新连接事件时 调用accept以尽可能多地接收连接
+	*/
     { ngx_string("multi_accept"),
       NGX_EVENT_CONF|NGX_CONF_FLAG,
       ngx_conf_set_flag_slot,
@@ -146,6 +167,7 @@ static ngx_command_t  ngx_event_core_commands[] = {
       offsetof(ngx_event_conf_t, multi_accept),
       NULL },
 
+	//确定是否使用accept_mutex负载均衡锁 默认为开启
     { ngx_string("accept_mutex"),
       NGX_EVENT_CONF|NGX_CONF_FLAG,
       ngx_conf_set_flag_slot,
@@ -153,6 +175,9 @@ static ngx_command_t  ngx_event_core_commands[] = {
       offsetof(ngx_event_conf_t, accept_mutex),
       NULL },
 
+	/*
+		启用accept_mutex负载均衡锁后 延迟accept_mutex_delay毫秒后再试图处理新连接事件
+	*/
     { ngx_string("accept_mutex_delay"),
       NGX_EVENT_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_msec_slot,
@@ -160,6 +185,7 @@ static ngx_command_t  ngx_event_core_commands[] = {
       offsetof(ngx_event_conf_t, accept_mutex_delay),
       NULL },
 
+	//需要对来自指定IP的TCP连接打印debug级别的调试日志
     { ngx_string("debug_connection"),
       NGX_EVENT_CONF|NGX_CONF_TAKE1,
       ngx_event_debug_connection,
@@ -171,6 +197,7 @@ static ngx_command_t  ngx_event_core_commands[] = {
 };
 
 
+//ngx_event_core_module不真正负责TCP的网络驱动 不会实现ngx_event_actions中的抽象方法
 ngx_event_module_t  ngx_event_core_module_ctx = {
     &event_core_name,
     ngx_event_create_conf,                 /* create configuration */
@@ -203,6 +230,7 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
     ngx_msec_t  timer, delta;
 
     if (ngx_timer_resolution) {
+        //开启了时间精度 给epoll的超时参数为-1 立即返回不等待
         timer = NGX_TIMER_INFINITE;
         flags = 0;
 
@@ -219,19 +247,31 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 #endif
     }
 
+	
     if (ngx_use_accept_mutex) {
         if (ngx_accept_disabled > 0) {
+            /*
+                负载均衡问题解决 不尝试去获取accept锁 
+                也就是说不再接收新连接 而只是处理已经
+            */
             ngx_accept_disabled--;
 
         } else {
+            //获取进程间锁 解决惊群问题
             if (ngx_trylock_accept_mutex(cycle) == NGX_ERROR) {
                 return;
             }
 
             if (ngx_accept_mutex_held) {
+                //获取进程锁成功后 会给flag添加一个标志位 表示事件延后执行
                 flags |= NGX_POST_EVENTS;
 
             } else {
+                /*
+                    获取进程锁失败 
+                    1.开启了时间精度ngx_timer_resolution 这个时候timer是NGX_TIMER_INFINITE 也要至少ngx_accept_mutex_delay时间后再去获取锁
+                    2.没有开启时间精度 如果下一个定时器超时的时间timer过长 也要设置为ngx_accept_mutex_delay(不能睡太久) 否则会影响到整个负载均衡机制
+                */
                 if (timer == NGX_TIMER_INFINITE
                     || timer > ngx_accept_mutex_delay)
                 {
@@ -243,21 +283,30 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 
     delta = ngx_current_msec;
 
+    //ngx_epoll_module.c  ngx_epoll_process_events函数执行
     (void) ngx_process_events(cycle, timer, flags);
 
+    //获取ngx_process_events的执行时间
     delta = ngx_current_msec - delta;
 
     ngx_log_debug1(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                    "timer delta: %M", delta);
-
+                    
+    //如果post_accept_events不为空的话 执行需要建立新连接的事件
     if (ngx_posted_accept_events) {
         ngx_event_process_posted(cycle, &ngx_posted_accept_events);
     }
 
+    //如果之前获取了进程锁 在这里释放
     if (ngx_accept_mutex_held) {
         ngx_shmtx_unlock(&ngx_accept_mutex);
     }
 
+    /*
+        ngx_process_events执行时消耗的时间delta大于0
+        而且这时可能有新的定时器事件被触发
+        调用ngx_event_expire_timers方法处理所有满足条件的定时器事件
+    */
     if (delta) {
         ngx_event_expire_timers();
     }
@@ -265,6 +314,7 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
     ngx_log_debug1(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                    "posted events %p", ngx_posted_events);
 
+    //ngx_posted_events队列不为空 调用ngx_event_process_posted执行ngx_posted_events队列中的普通读/写事件
     if (ngx_posted_events) {
         if (ngx_threaded) {
             ngx_wakeup_worker_thread(cycle);
@@ -491,6 +541,11 @@ ngx_event_module_init(ngx_cycle_t *cycle)
 
     /* cl should be equal or bigger than cache line size */
 
+    /*
+        计算出需要使用的共享内存的大小 为什么每个统计成员需要使用128字节呢 每个ngx_atomic_t原子变量最多需要8字节而已
+        因为Nginx充分考虑了CPU的二级缓存 在目前许多CPU架构下缓存行的大小都是128字节
+        而下面需要统计的变量都是访问非常频繁的成员 同时它们占用的内存又非常少 所以采用了每个成员都使用128字节存放的形式 这样速度更快
+    */
     cl = 128;
 
     size = cl            /* ngx_accept_mutex */
@@ -508,18 +563,23 @@ ngx_event_module_init(ngx_cycle_t *cycle)
 
 #endif
 
+    //初始化描述共享内存的ngx_shm_t结构体
     shm.size = size;
     shm.name.len = sizeof("nginx_shared_zone");
     shm.name.data = (u_char *) "nginx_shared_zone";
     shm.log = cycle->log;
 
+    //开辟一块共享内存 共享内存的大小为shm.size
     if (ngx_shm_alloc(&shm) != NGX_OK) {
         return NGX_ERROR;
     }
 
+    //共享内存的首地址就在shm.addr成员中
     shared = shm.addr;
 
+    //原子变量类型的accept锁使用了128字节的共享内存
     ngx_accept_mutex_ptr = (ngx_atomic_t *) shared;
+    //ngx_accept_mutex就是负载均衡锁 spin值为-1则是告诉Nginx这把锁不可以使进程进入睡眠状态
     ngx_accept_mutex.spin = (ngx_uint_t) -1;
 
     if (ngx_shmtx_create(&ngx_accept_mutex, shared, cycle->lock_file.data)
@@ -528,6 +588,7 @@ ngx_event_module_init(ngx_cycle_t *cycle)
         return NGX_ERROR;
     }
 
+    //原子变量类型的ngx_connection_counter将统计所有建立过的连接数（包括主动发起的连接）
     ngx_connection_counter = (ngx_atomic_t *) (shared + 1 * cl);
 
     (void) ngx_atomic_cmp_set(ngx_connection_counter, 0, 1);
@@ -544,6 +605,7 @@ ngx_event_module_init(ngx_cycle_t *cycle)
 
 #if (NGX_STAT_STUB)
 
+    //依次初始化需要统计的6个原子变量，也就是使用共享内存作为原子变量
     ngx_stat_accepted = (ngx_atomic_t *) (shared + 3 * cl);
     ngx_stat_handled = (ngx_atomic_t *) (shared + 4 * cl);
     ngx_stat_requests = (ngx_atomic_t *) (shared + 5 * cl);
@@ -586,6 +648,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     ccf = (ngx_core_conf_t *) ngx_get_conf(cycle->conf_ctx, ngx_core_module);
     ecf = ngx_event_get_conf(cycle->conf_ctx, ngx_event_core_module);
 
+	//判断是否使用accept_mutex负载均衡锁
     if (ccf->master && ccf->worker_processes > 1 && ecf->accept_mutex) {
         ngx_use_accept_mutex = 1;
         ngx_accept_mutex_held = 0;
@@ -602,10 +665,12 @@ ngx_event_process_init(ngx_cycle_t *cycle)
     }
 #endif
 
+	//初始化红黑树实现的定时器
     if (ngx_event_timer_init(cycle->log) == NGX_ERROR) {
         return NGX_ERROR;
     }
 
+	//使用use配置项找到指定的事件驱动模块 调用它的init方法
     for (m = 0; ngx_modules[m]; m++) {
         if (ngx_modules[m]->type != NGX_EVENT_MODULE) {
             continue;
@@ -627,6 +692,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
 #if !(NGX_WIN32)
 
+	//配置文件中设置了控制时间精度 开启定时器
     if (ngx_timer_resolution && !(ngx_event_flags & NGX_USE_TIMER_EVENT)) {
         struct sigaction  sa;
         struct itimerval  itv;
@@ -652,6 +718,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
         }
     }
 
+	//为ngx_cycle_t中的files成员预分配句柄
     if (ngx_event_flags & NGX_USE_FD_EVENT) {
         struct rlimit  rlmt;
 
@@ -672,6 +739,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
 #endif
 
+	//预分配connections数组作为连接池
     cycle->connections =
         ngx_alloc(sizeof(ngx_connection_t) * cycle->connection_n, cycle->log);
     if (cycle->connections == NULL) {
@@ -680,12 +748,14 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
     c = cycle->connections;
 
+	//预分配读事件数组
     cycle->read_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n,
                                    cycle->log);
     if (cycle->read_events == NULL) {
         return NGX_ERROR;
     }
 
+	//给读事件数组赋初值
     rev = cycle->read_events;
     for (i = 0; i < cycle->connection_n; i++) {
         rev[i].closed = 1;
@@ -696,12 +766,14 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 #endif
     }
 
+	//预分配写事件数组
     cycle->write_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n,
                                     cycle->log);
     if (cycle->write_events == NULL) {
         return NGX_ERROR;
     }
 
+	//给写事件数组赋初值
     wev = cycle->write_events;
     for (i = 0; i < cycle->connection_n; i++) {
         wev[i].closed = 1;
@@ -711,13 +783,17 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 #endif
     }
 
+	/*
+		将上述3个数组相应的读/写事件设置到每一个ngx_connection_t连接对象中 
+		同时把这些连接以ngx_connection_t中的data成员作为next指针串联成链表
+	*/
     i = cycle->connection_n;
     next = NULL;
 
     do {
         i--;
 
-        c[i].data = next;
+        c[i].data = next;	//暂时使用data成员作为next指针 串联为单链表
         c[i].read = &cycle->read_events[i];
         c[i].write = &cycle->write_events[i];
         c[i].fd = (ngx_socket_t) -1;
@@ -729,6 +805,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 #endif
     } while (i);
 
+	//将空闲链表指向connections的第一个元素 也就是单链表的首部
     cycle->free_connections = next;
     cycle->free_connection_n = cycle->connection_n;
 
@@ -736,13 +813,16 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
     ls = cycle->listening.elts;
     for (i = 0; i < cycle->listening.nelts; i++) {
+        printf("STUDY cycle listen: index %d  FD %d\n", i, ls[i].fd);
 
+		//从cycle中的free_connections中获取一个连接 用于监听指定端口服务使用
         c = ngx_get_connection(ls[i].fd, cycle->log);
 
         if (c == NULL) {
             return NGX_ERROR;
         }
 
+		//给刚刚获取的连接赋值
         c->log = &ls[i].log;
 
         c->listening = &ls[i];
@@ -815,12 +895,15 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
 #else
 
+		//设置读事件的处理方法 有新连接事件时调用这个处理方法
         rev->handler = ngx_event_accept;
 
+		//如果使用accept_mutex 则使用了负载均衡 不进行下面的步骤
         if (ngx_use_accept_mutex) {
             continue;
         }
 
+		//将监听对象连接的读事件添加到事件驱动模块中 开始监听服务
         if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
             if (ngx_add_conn(c) == NGX_ERROR) {
                 return NGX_ERROR;

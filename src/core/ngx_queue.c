@@ -59,6 +59,7 @@ ngx_queue_sort(ngx_queue_t *queue,
         return;
     }
 
+	//从第二个元素开始比较排序
     for (q = ngx_queue_next(q); q != ngx_queue_sentinel(queue); q = next) {
 
         prev = ngx_queue_prev(q);
@@ -67,6 +68,10 @@ ngx_queue_sort(ngx_queue_t *queue,
         ngx_queue_remove(q);
 
         do {
+			/*
+				如果当前元素比前面的元素大 或者 前面已经没有比当前元素小的了 退出循环 
+				将当前元素插入到最大的比 自己小的元素的后面
+			*/
             if (cmp(prev, q) <= 0) {
                 break;
             }

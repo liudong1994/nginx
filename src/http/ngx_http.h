@@ -114,6 +114,7 @@ void ngx_http_request_empty_handler(ngx_http_request_t *r);
 ngx_int_t ngx_http_send_special(ngx_http_request_t *r, ngx_uint_t flags);
 
 
+// 接收包体方法
 ngx_int_t ngx_http_read_client_request_body(ngx_http_request_t *r,
     ngx_http_client_body_handler_pt post_handler);
 
@@ -129,7 +130,7 @@ time_t ngx_http_parse_time(u_char *value, size_t len);
 size_t ngx_http_get_time(char *buf, time_t t);
 
 
-
+// 丢弃包体方法 HTTP模块丢弃包体完成后 会自动调用ngx_http_finalize_request
 ngx_int_t ngx_http_discard_request_body(ngx_http_request_t *r);
 void ngx_http_discarded_request_body_handler(ngx_http_request_t *r);
 void ngx_http_block_reading(ngx_http_request_t *r);

@@ -44,6 +44,7 @@ ngx_module_t  ngx_http_write_filter_module = {
 };
 
 
+// 最后一个HTTP包体过滤模块
 ngx_int_t
 ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
@@ -56,6 +57,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
     c = r->connection;
 
+    // 请求出错 直接返回
     if (c->error) {
         return NGX_ERROR;
     }
@@ -67,6 +69,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
     /* find the size, the flush point and the last link of the saved chain */
 
+    // 遍历缓冲区链表 计算出out缓冲区一共占用了多少字节
     for (cl = r->out; cl; cl = cl->next) {
         ll = &cl->next;
 
@@ -111,7 +114,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     }
 
     /* add the new chain to the existent one */
-
+    // in参数即为这次本次要发送的缓冲区链表 将in加入到out链表的末尾 并更新size值
     for (ln = in; ln; ln = ln->next) {
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
@@ -162,6 +165,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         }
     }
 
+    // 给缓冲区做一个结尾
     *ll = NULL;
 
     ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -175,16 +179,23 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
      * is smaller than "postpone_output" directive
      */
 
+    /*
+        检查缓冲区中每个ngx_buf_t块的3个标志位：flush recycled last_buf 如果这3个标志位同时为0(即待发送的out链表中没有一个缓冲区表示响应已经结束或需要立刻发送出去)
+        而且本次要发送的缓冲区in虽然不为空 但以上两步骤中计算出的待发送响应的大小又小于配置文件中的postpone_output参数 那么说明当前的缓冲区是不完整的且没有必要立刻发送 直接返回NGX_OK
+    */
     if (!last && !flush && in && size < (off_t) clcf->postpone_output) {
         return NGX_OK;
     }
 
+    // 含有delayed标志位 说明之前可能超速了 暂时不能发送响应
     if (c->write->delayed) {
+        // 将buffered标志位放上NGX_HTTP_WRITE_BUFFERED宏 表示out缓冲区还有响应等待发送
         c->buffered |= NGX_HTTP_WRITE_BUFFERED;
         return NGX_AGAIN;
     }
 
     if (size == 0 && !(c->buffered & NGX_LOWLEVEL_BUFFERED)) {
+        // 没有数据需要发送 做一些收尾工作
         if (last) {
             r->out = NULL;
             c->buffered &= ~NGX_HTTP_WRITE_BUFFERED;
@@ -210,12 +221,23 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         return NGX_ERROR;
     }
 
+    // 需要限速
     if (r->limit_rate) {
+
+        /*
+            计算出本次可以继续发送的字节数
+            limit_rate表示每秒可以发送的字节数
+            limit_rate_after表示发送了这么多字节后 限速开始生效
+            sent表示已经发送的字节数
+        */
         limit = r->limit_rate * (ngx_time() - r->start_sec + 1)
                 - (c->sent - clcf->limit_rate_after);
 
         if (limit <= 0) {
+            // 达到速度上限 需要限速
             c->write->delayed = 1;
+
+            // 添加写事件定时器 根据超发字节数计算出时间 在加1ms 精确的激活请求
             ngx_add_timer(c->write,
                           (ngx_msec_t) (- limit * 1000 / r->limit_rate + 1));
 
@@ -224,6 +246,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
             return NGX_AGAIN;
         }
 
+        // 如果limit过大 则设置为配置文件中的sendfile_max_chunk大小
         if (clcf->sendfile_max_chunk
             && (off_t) clcf->sendfile_max_chunk < limit)
         {
@@ -231,6 +254,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         }
 
     } else {
+        // 不需要限速 发送大小为配置文件中的sendfile_max_chunk大小
         limit = clcf->sendfile_max_chunk;
     }
 
@@ -239,6 +263,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http write filter limit %O", limit);
 
+    // 根据计算得出发送数据量 进行数据发送
     chain = c->send_chain(c, r->out, limit);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -251,10 +276,12 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
     if (r->limit_rate) {
 
+        // 计算发送完这次数据 需不需要进行限速
         nsent = c->sent;
 
         if (clcf->limit_rate_after) {
 
+            // 设置了发送多少字节后 进行限速字段
             sent -= clcf->limit_rate_after;
             if (sent < 0) {
                 sent = 0;
@@ -269,6 +296,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         delay = (ngx_msec_t) ((nsent - sent) * 1000 / r->limit_rate);
 
         if (delay > 0) {
+            // 已经超发了很多数据了 需要限速 将写事件加入定时器
             limit = 0;
             c->write->delayed = 1;
             ngx_add_timer(c->write, delay);
@@ -284,6 +312,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     }
 
     for (cl = r->out; cl && cl != chain; /* void */) {
+        // 将已经发送完的数据 归还给内存池
         ln = cl;
         cl = cl->next;
         ngx_free_chain(r->pool, ln);
@@ -292,10 +321,12 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     r->out = chain;
 
     if (chain) {
+        // 还有未发送的数据 添加标志位 返回NGX_AGAIN
         c->buffered |= NGX_HTTP_WRITE_BUFFERED;
         return NGX_AGAIN;
     }
 
+    // 数据已经发送完毕
     c->buffered &= ~NGX_HTTP_WRITE_BUFFERED;
 
     if ((c->buffered & NGX_LOWLEVEL_BUFFERED) && r->postponed == NULL) {

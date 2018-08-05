@@ -131,6 +131,7 @@ ngx_http_parse_request_line(ngx_http_request_t *r, ngx_buf_t *b)
         sw_almost_done
     } state;
 
+    // 取出之前 http头的解析状态
     state = r->state;
 
     for (p = b->pos; p < b->last; p++) {
@@ -138,6 +139,7 @@ ngx_http_parse_request_line(ngx_http_request_t *r, ngx_buf_t *b)
 
         switch (state) {
 
+        // 找HTTP methods起始位置
         /* HTTP methods: GET, HEAD, POST */
         case sw_start:
             r->request_start = p;
@@ -153,6 +155,7 @@ ngx_http_parse_request_line(ngx_http_request_t *r, ngx_buf_t *b)
             state = sw_method;
             break;
 
+        // 确定HTTP method
         case sw_method:
             if (ch == ' ') {
                 r->method_end = p - 1;

@@ -14,11 +14,11 @@
 
 
 typedef struct {
-    u_char      *addr;
-    size_t       size;
-    ngx_str_t    name;
-    ngx_log_t   *log;
-    ngx_uint_t   exists;   /* unsigned  exists:1;  */
+    u_char      *addr;	//共享内存起始地址
+    size_t       size;	//共享内存大小
+    ngx_str_t    name;	//共享内存名称
+    ngx_log_t   *log;	//日志模块
+	ngx_uint_t   exists;   /* unsigned  exists:1;  表示共享内存是否已经分配过的标志位 为1时表示已经存在 */ 
 } ngx_shm_t;
 
 

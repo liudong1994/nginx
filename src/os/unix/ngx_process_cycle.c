@@ -297,6 +297,7 @@ ngx_single_process_cycle(ngx_cycle_t *cycle)
         exit(2);
     }
 
+    //调用每个模块的 进程初始化前需要操作的函数指针
     for (i = 0; ngx_modules[i]; i++) {
         if (ngx_modules[i]->init_process) {
             if (ngx_modules[i]->init_process(cycle) == NGX_ERROR) {
@@ -309,10 +310,11 @@ ngx_single_process_cycle(ngx_cycle_t *cycle)
     for ( ;; ) {
         ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "worker cycle");
 
+        //主流程
         ngx_process_events_and_timers(cycle);
 
+        //程序退出前的操作
         if (ngx_terminate || ngx_quit) {
-
             for (i = 0; ngx_modules[i]; i++) {
                 if (ngx_modules[i]->exit_process) {
                     ngx_modules[i]->exit_process(cycle);
@@ -322,6 +324,7 @@ ngx_single_process_cycle(ngx_cycle_t *cycle)
             ngx_master_process_exit(cycle);
         }
 
+        //重新打开配置文件
         if (ngx_reconfigure) {
             ngx_reconfigure = 0;
             ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0, "reconfiguring");
@@ -686,6 +689,7 @@ ngx_master_process_exit(ngx_cycle_t *cycle)
 
     ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0, "exit");
 
+    //模块函数指针调用
     for (i = 0; ngx_modules[i]; i++) {
         if (ngx_modules[i]->exit_master) {
             ngx_modules[i]->exit_master(cycle);
@@ -711,6 +715,7 @@ ngx_master_process_exit(ngx_cycle_t *cycle)
 
     ngx_destroy_pool(cycle->pool);
 
+    //直接exit(0)...
     exit(0);
 }
 

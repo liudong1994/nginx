@@ -113,6 +113,7 @@ ngx_reset_pool(ngx_pool_t *pool)
 }
 
 
+//对齐分配首地址
 void *
 ngx_palloc(ngx_pool_t *pool, size_t size)
 {
@@ -143,6 +144,7 @@ ngx_palloc(ngx_pool_t *pool, size_t size)
 }
 
 
+//不对齐分配首地址
 void *
 ngx_pnalloc(ngx_pool_t *pool, size_t size)
 {

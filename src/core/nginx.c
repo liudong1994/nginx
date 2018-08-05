@@ -300,6 +300,7 @@ main(int argc, char *const *argv)
     if (init_cycle.pool == NULL) {
         return 1;
     }
+    printf("ngx_create_pool Success 1024\n");
 
     if (ngx_save_argv(&init_cycle, argc, argv) != NGX_OK) {
         return 1;
@@ -330,6 +331,7 @@ main(int argc, char *const *argv)
         ngx_modules[i]->index = ngx_max_module++;
     }
 
+    //做了很多操作
     cycle = ngx_init_cycle(&init_cycle);
     if (cycle == NULL) {
         if (ngx_test_config) {
@@ -350,6 +352,10 @@ main(int argc, char *const *argv)
     }
 
     if (ngx_signal) {
+        /*
+            如果ngx_signal存在的话 说明此次启动的nginx是为了向实际正在运行的nginx发送信号而已
+            发送完信号当前进程就可以直接退出了
+        */
         return ngx_signal_process(cycle, ngx_signal);
     }
 
@@ -406,9 +412,11 @@ main(int argc, char *const *argv)
     ngx_use_stderr = 0;
 
     if (ngx_process == NGX_PROCESS_SINGLE) {
+        printf("SINGLE Process\n");
         ngx_single_process_cycle(cycle);
 
     } else {
+        printf("Multi Process\n");
         ngx_master_process_cycle(cycle);
     }
 

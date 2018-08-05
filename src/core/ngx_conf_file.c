@@ -173,6 +173,13 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
         rc = ngx_conf_read_token(cf);
 
         /*
+        printf("ngx_conf_parse  execute:args[1]:%s\n", cf->args->elts);
+        if(cf->name != NULL){
+            printf("name:%s\n", cf->name);
+        }
+        */
+
+        /*
          * ngx_conf_read_token() may return
          *
          *    NGX_ERROR             there is error

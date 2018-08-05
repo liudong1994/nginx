@@ -75,7 +75,7 @@ ngx_event_connect_peer(ngx_peer_connection_t *pc)
         }
     }
 
-    c->recv = ngx_recv;
+    c->recv = ngx_recv;     // ToDo ngx_recv宏指向那个函数
     c->send = ngx_send;
     c->recv_chain = ngx_recv_chain;
     c->send_chain = ngx_send_chain;

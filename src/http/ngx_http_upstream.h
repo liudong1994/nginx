@@ -259,17 +259,29 @@ struct ngx_http_upstream_s {
 
     ngx_event_pipe_t                *pipe;
 
+	/*
+		由于 request_bufs决定发送什么样的请求给上游服务器，在实现 create_request方法时需要设置它
+	*/
     ngx_chain_t                     *request_bufs;
 
     ngx_output_chain_ctx_t           output;
     ngx_chain_writer_ctx_t           writer;
 
+	//upstream访问时的所有限制参数
     ngx_http_upstream_conf_t        *conf;
 
     ngx_http_upstream_headers_in_t   headers_in;
 
+	//通过 resolved可以直接指定上游服务器的地址
     ngx_http_upstream_resolved_t    *resolved;
 
+	/*
+		buffer成员存储接收自上游服务器发来的响应内容，由于它会被复用，所以具有以下多种意义：
+		1.在使用 process_header方法解析上游服务器响应的包头时，buffer中将会保存完整的响应包头；
+		2.当下面的 buffering成员变量为1的时候，而且此时 upstream是向下游转发上游的包体时，buffer没有意义；
+		3.当 buffering标志位为0时，buffer缓冲区会被用于反复的接收上游的包体，进而向下游转发；
+		4.当 upstream并不用于转发上游包体时，buffer会被用于反复接收上游的包体，HTTP模块实现的 input_filter方法需要关注它
+	*/
     ngx_buf_t                        buffer;
     size_t                           length;
 
@@ -284,10 +296,21 @@ struct ngx_http_upstream_s {
 #if (NGX_HTTP_CACHE)
     ngx_int_t                      (*create_key)(ngx_http_request_t *r);
 #endif
+
+	//构造发往上游服务器的请求内容
     ngx_int_t                      (*create_request)(ngx_http_request_t *r);
     ngx_int_t                      (*reinit_request)(ngx_http_request_t *r);
+
+	/*
+		收到上游服务器的响应后就会回调 process_header方法。如果 process_header返回 NGX_AGAIN，
+		那么是在告诉 upstream还没有收到完整的响应包头，此时，对于本次 upstream来说，再次接收到
+		上游服务器发来的 TCP流时，还会调用 process_header方法处理，直到 process_header函数返回
+		非 NGX_AGAIN值这一阶段才会停止
+	*/
     ngx_int_t                      (*process_header)(ngx_http_request_t *r);
     void                           (*abort_request)(ngx_http_request_t *r);
+
+	//销毁 upstream时调用
     void                           (*finalize_request)(ngx_http_request_t *r,
                                          ngx_int_t rc);
     ngx_int_t                      (*rewrite_redirect)(ngx_http_request_t *r,
@@ -306,11 +329,19 @@ struct ngx_http_upstream_s {
     unsigned                         store:1;
     unsigned                         cacheable:1;
     unsigned                         accel:1;
+
+	//是否基于 ssl协议访问上游服务器
     unsigned                         ssl:1;
 #if (NGX_HTTP_CACHE)
     unsigned                         cache_status:3;
 #endif
 
+	/*
+		在向上客户端转发上游服务器的包体时才有用。当 buffering为1时，表示使用多个缓冲区以及磁盘文件
+		来转发上游的响应包体。当 Nginx与上游的网速远大于 Nginx与下游的网速的时候，让 Nginx开辟更多的
+		内存甚至使用磁盘文件来缓存上游的响应包体，这是有意义的，它可以减轻上游服务器的并发压力。当
+		buffering为0时，表示只使用上面的这一个 buffer缓冲区来向下游转发响应包体
+	*/
     unsigned                         buffering:1;
 
     unsigned                         request_sent:1;
