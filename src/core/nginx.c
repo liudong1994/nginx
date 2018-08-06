@@ -9,6 +9,11 @@
 #include <ngx_core.h>
 #include <nginx.h>
 
+//测试数据结构使用
+#include <ngx_queue_test.h>
+#include <ngx_array_test.h>
+#include <ngx_rbtree_test.h>
+
 
 static ngx_int_t ngx_add_inherited_sockets(ngx_cycle_t *cycle);
 static ngx_int_t ngx_get_options(int argc, char *const *argv);
