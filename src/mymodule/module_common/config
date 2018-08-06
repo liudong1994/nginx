@@ -1,0 +1,6 @@
+ngx_addon_name=module_common
+
+NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/utils.cpp"
+
+CORE_INCS="$CORE_INCS $ngx_addon_dir"
+CORE_LIBS="$CORE_LIBS -ldl -lstdc++" 
