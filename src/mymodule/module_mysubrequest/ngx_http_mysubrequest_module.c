@@ -4,7 +4,7 @@
 
 // TODO mysubrequest -> myplugin handler
 
-/*
+/*  ToDo
 static ngx_http_variable_t ngx_http_mysubrequest_variables[] = {
 { ngx_string("user_key"), NULL, ngx_http_user_key,
 0, NGX_HTTP_VAR_NOCACHEABLE, 0 },
@@ -64,7 +64,7 @@ ngx_module_t  ngx_http_mysubrequest_module = {
 
 
 static ngx_int_t ngx_http_mysubrequest_preconfiguration(ngx_conf_t *cf) {
-    // TODO
+    // ToDo
 
     return NGX_OK;
 }
