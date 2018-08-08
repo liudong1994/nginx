@@ -2,14 +2,14 @@
 #include "ngx_http_plugin_module.h"
 #include "plugin_manager.h"
 
-static PLUGIN::CPluginManager *g_plugin_manager = NULL;
+static plugin::CPluginManager *g_plugin_manager = NULL;
 
 
 int plugin_create_manager(void *conf) {
     if (NULL != g_plugin_manager)
         return NGX_ERROR;
 
-    g_plugin_manager = new PLUGIN::CPluginManager();
+    g_plugin_manager = new plugin::CPluginManager();
     ngx_http_plugin_main_conf_t *main_conf = (ngx_http_plugin_main_conf_t *)conf;
     plugin_info_t *plugininfo = (plugin_info_t *)main_conf->plugin_info.elts;
 

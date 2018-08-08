@@ -1,16 +1,13 @@
 #ifndef __PLUGIN_MANAGER_H__
 #define __PLUGIN_MANAGER_H__
 
-#include <ngx_config.h>
-#include <ngx_core.h>
-#include <ngx_http.h>
 #include <map>
 #include <string>
 #include <memory>           // c++11 shared_ptr
 #include "plugin.h"
 
 
-namespace PLUGIN {
+namespace plugin {
 
 struct CPluginContext {
     std::string plugin_name;

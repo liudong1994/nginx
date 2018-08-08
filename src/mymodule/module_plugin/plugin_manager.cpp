@@ -8,7 +8,8 @@
 
 
 using namespace std;
-using namespace PLUGIN;
+
+namespace plugin {
 
 
 typedef CPlugin *(*create_plugin_func)();
@@ -69,25 +70,25 @@ int CPluginManager::PluginInitMaster() {
     for (auto itr = m_map_plugins_context.begin(); itr != m_map_plugins_context.end(); ++itr) {
         std::shared_ptr<CPluginContext> plugin_context = itr->second;
         int rc = plugin_context->plugin_ptr->InitMaster(plugin_context->plugin_conf);
-        if (NGX_OK != rc) {
+        if (0 != rc) {
             cerr << plugin_context->plugin_path << " init module error, so_conf=" << plugin_context->plugin_conf << endl;
-            return NGX_ERROR;
+            return -1;
         }
     }
-    return NGX_OK;
+    return 0;
 }
 
 int CPluginManager::PluginInitProcess() {
     for (auto itr = m_map_plugins_context.begin(); itr != m_map_plugins_context.end(); ++itr) {
         std::shared_ptr<CPluginContext> plugin_context = itr->second;
         int rc = plugin_context->plugin_ptr->InitProcess(plugin_context->plugin_conf);
-        if (NGX_OK != rc) {
+        if (0 != rc) {
             cerr << plugin_context->plugin_path << " init process error, so_conf=" << plugin_context->plugin_conf << endl;
-            return NGX_ERROR;
+            return -1;
         }
     }
 
-    return NGX_OK;
+    return 0;
 }
 
 void CPluginManager::PluginExitProcess() {
@@ -113,3 +114,5 @@ CPlugin* CPluginManager::GetPlugin(const std::string& plugin_name) {
     return itr->second->plugin_ptr;
 }
 
+
+}

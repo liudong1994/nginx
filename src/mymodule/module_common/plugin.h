@@ -10,7 +10,7 @@
 #include <sys/time.h>
 
 
-namespace PLUGIN {
+namespace plugin {
 
 struct CSubrequest {
     std::string uri;

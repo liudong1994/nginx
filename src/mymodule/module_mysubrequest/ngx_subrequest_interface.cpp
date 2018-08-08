@@ -10,7 +10,7 @@
 #include "ngx_http_mysubrequest_module.h"
 
 using namespace std;        // important std::replace
-using namespace::PLUGIN;
+using namespace plugin;
 
 
 #define safeAssert(_e) if(!(_e)) {                                  \
@@ -315,7 +315,7 @@ static int ngxr_to_crequest(ngx_http_request_t *r, CRequest *request) {
     // get param
     if (r->args.len > 0) {
         //string uri_dec = uri_decode(string((char *)r->args.data, r->args.len));
-        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[mysubrequest] ngxr_to_crequest uri: %V", r->args);
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[mysubrequest] ngxr_to_crequest uri: %V", &r->args);
         replace((char *)r->args.data, (char *)r->args.data + r->args.len, '\t', ' ');
         split_string(request->param, (char *)r->args.data, r->args.len, '&');
     }
@@ -441,8 +441,7 @@ static int crequest_to_ngxr(CRequest *request, ngx_http_request_t *r, int nosend
     field->value.len = request->headers_out.location.size();
     field->value.data = (u_char *)ngx_palloc(r->pool, field->value.len);
     safeAssert(field->value.data);
-    ngx_memcpy(field->value.data, request->headers_out.location.c_str(),
-        request->headers_out.location.size());
+    ngx_memcpy(field->value.data, request->headers_out.location.c_str(), request->headers_out.location.size());
 
     //set content_type
     str.len = request->headers_out.content_type.size();
