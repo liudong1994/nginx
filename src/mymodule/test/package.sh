@@ -5,5 +5,5 @@ fi
 
 rm -rf *.rpm
 make clean;make
-/home/homework/script/rpmbuild2  process.spec $1 $2 /home/homework/
+/home/homework/script/rpmbuild2  server.spec $1 $2 /home/homework/
 
