@@ -558,6 +558,7 @@ ngx_http_proxy_handler(ngx_http_request_t *r)
     ngx_http_proxy_ctx_t       *ctx;
     ngx_http_proxy_loc_conf_t  *plcf;
 
+    // 创建 ngx_http_upstream_t结构体
     if (ngx_http_upstream_create(r) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
@@ -571,6 +572,7 @@ ngx_http_proxy_handler(ngx_http_request_t *r)
 
     plcf = ngx_http_get_module_loc_conf(r, ngx_http_proxy_module);
 
+    // 设置ngx_http_upstream_t结构体的一些参数
     u = r->upstream;
 
     if (plcf->proxy_lengths == NULL) {
@@ -615,6 +617,7 @@ ngx_http_proxy_handler(ngx_http_request_t *r)
 
     u->accel = 1;
 
+    // 读取完请求的body后 调用ngx_http_upstream_init进行真正upstream的初始化工作
     rc = ngx_http_read_client_request_body(r, ngx_http_upstream_init);
 
     if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {

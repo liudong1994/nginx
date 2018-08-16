@@ -120,7 +120,7 @@ struct ngx_http_upstream_srv_conf_s {
 
 
 typedef struct {
-    // 当在ngx_http_upstream_t结构体中没有实现resolved 成员时  upstream 这个结构体才会生效 它会定义上游服务器的配置
+    // 当在ngx_http_upstream_t结构体中没有实现resolved 成员时  upstream这个结构体才会生效 它会定义上游服务器的配置
     ngx_http_upstream_srv_conf_t    *upstream;
 
     // 建立TCP 连接的超时时间，实际上就是写事件添加到定时器中时设置的超时时间
@@ -377,7 +377,7 @@ struct ngx_http_upstream_s {
     */
     ngx_http_upstream_headers_in_t   headers_in;
 
-	// 通过 resolved可以直接指定上游服务器的地址
+	// 通过resolved可以直接指定上游服务器的地址
     ngx_http_upstream_resolved_t    *resolved;
 
 	/*
