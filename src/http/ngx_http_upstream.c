@@ -1385,6 +1385,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http upstream send request");
 
+    // 如果没有发送请求 检查连接状态
     if (!u->request_sent && ngx_http_upstream_test_connect(c) != NGX_OK) {
         ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_ERROR);
         return;
@@ -1392,8 +1393,10 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     c->log->action = "sending request to upstream";
 
+    // 发送请求给上游服务器   TODO
     rc = ngx_output_chain(&u->output, u->request_sent ? NULL : u->request_bufs);
 
+    // 记录已经发送请求给上游服务器 可能没有全部发送 会在u->output中记录未发送完成的请求
     u->request_sent = 1;
 
     if (rc == NGX_ERROR) {
@@ -1401,13 +1404,17 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
         return;
     }
 
+    // 首先删除 写超时定时器
     if (c->write->timer_set) {
         ngx_del_timer(c->write);
     }
 
+    // 如果返回AGAIN 发送请求一次性没有发送完毕
     if (rc == NGX_AGAIN) {
+        // 再次加入写事件定时器
         ngx_add_timer(c->write, u->conf->send_timeout);
 
+        // 将写事件加入到epoll中
         if (ngx_handle_write_event(c->write, u->conf->send_lowat) != NGX_OK) {
             ngx_http_upstream_finalize_request(r, u,
                                                NGX_HTTP_INTERNAL_SERVER_ERROR);
@@ -1431,9 +1438,11 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
         c->tcp_nopush = NGX_TCP_NOPUSH_UNSET;
     }
 
+    // 添加读事件定时器
     ngx_add_timer(c->read, u->conf->read_timeout);
 
 #if 1
+    // 检查是否有数据可读
     if (c->read->ready) {
 
         /* post aio operation */
@@ -1445,13 +1454,16 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
          * it's better to do here because we postpone header buffer allocation
          */
 
+        // 接收处理上游服务器的相应
         ngx_http_upstream_process_header(r, u);
         return;
     }
 #endif
 
+    // 将写事件handler设置为什么都不做 防止TCP连接上有可写事件 导致再次发送请求给上游服务器
     u->write_event_handler = ngx_http_upstream_dummy_handler;
 
+    // 将写事件handler添加到epoll中 （虽然写事件触发时 upstream的写事件handler什么都不做 但是也需要关注写事件的触发）
     if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u,
                                            NGX_HTTP_INTERNAL_SERVER_ERROR);
