@@ -1534,16 +1534,19 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     c->log->action = "reading response header from upstream";
 
+    // 读事件超时 调用ngx_http_upstream_next进行重试或结束
     if (c->read->timedout) {
         ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_TIMEOUT);
         return;
     }
 
+    // 如果请求还没有发送 或者 与上游服务器连接有问题 直接结束请求
     if (!u->request_sent && ngx_http_upstream_test_connect(c) != NGX_OK) {
         ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_ERROR);
         return;
     }
 
+    // 申请接收响应的内存
     if (u->buffer.start == NULL) {
         u->buffer.start = ngx_palloc(r->pool, u->conf->buffer_size);
         if (u->buffer.start == NULL) {
@@ -1559,6 +1562,10 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
         u->buffer.tag = u->output.tag;
 
+        /*
+            初始化headers 在HTTP模块特定实现的process_header解析上游服务器特定协议 可以适配HTTP响应头到此结构体中 
+            nginx会把headers中头部添加到要发送到下游客户端的响应头部headers_out中
+        */
         if (ngx_list_init(&u->headers_in.headers, r->pool, 8,
                           sizeof(ngx_table_elt_t))
             != NGX_OK)
@@ -1585,7 +1592,7 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 #if 0
             ngx_add_timer(rev, u->read_timeout);
 #endif
-
+            // 返回AGAIN 继续添加读事件
             if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
                 ngx_http_upstream_finalize_request(r, u,
                                                NGX_HTTP_INTERNAL_SERVER_ERROR);
@@ -1613,10 +1620,12 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
         u->peer.cached = 0;
 #endif
 
+        // 接收了一段上游服务器返回的响应数据 调用HTTP模块实现的process_header进行解析
         rc = u->process_header(r);
 
         if (rc == NGX_AGAIN) {
 
+            // HTTP模块实现的process_header返回AGAIN 说明数据不足 仍需要继续解析
             if (u->buffer.last == u->buffer.end) {
                 ngx_log_error(NGX_LOG_ERR, c->log, 0,
                               "upstream sent too big header");
@@ -1629,9 +1638,11 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
             continue;
         }
 
+        // 其他返回 暂时不再读取上游服务器的数据 进行下一步的处理
         break;
     }
 
+    // 根据HTTP返回的状态进行特殊判断
     if (rc == NGX_HTTP_UPSTREAM_INVALID_HEADER) {
         ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_INVALID_HEADER);
         return;
@@ -1645,8 +1656,10 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     /* rc == NGX_OK */
 
+    // 上游服务器处理响应错误
     if (u->headers_in.status_n > NGX_HTTP_SPECIAL_RESPONSE) {
 
+        // subrequest_in_memory为1时 不转发响应
         if (r->subrequest_in_memory) {
             u->buffer.last = u->buffer.pos;
         }
@@ -1660,23 +1673,35 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
         }
     }
 
+    /*
+        处理已经解析出的头部 该方法将会把已经解析出的头部设置到请求ngx_http_request_t结构体的headers_out成员中
+        这样在调用ngx_http_send_header方法发送响应包头给客户端时将会发送这些设置了的头部
+    */
     if (ngx_http_upstream_process_headers(r, u) != NGX_OK) {
         return;
     }
 
+    // subrequest_in_memory为0时代表转发响应到客户端
     if (!r->subrequest_in_memory) {
+        // 开始发送响应到客户端
         ngx_http_upstream_send_response(r, u);
         return;
     }
 
     /* subrequest content in memory */
 
+    /*
+        subrequest在内存中进行处理 
+        首先检查HTTP模块是否设置了包体处理handler函数input_filter
+        没有设置的话 首先设置默认值
+    */
     if (u->input_filter == NULL) {
         u->input_filter_init = ngx_http_upstream_non_buffered_filter_init;
         u->input_filter = ngx_http_upstream_non_buffered_filter;
         u->input_filter_ctx = r;
     }
 
+    // 调用HTTP模块设置或者上面默认设置的 包体处理初始化函数
     if (u->input_filter_init(u->input_filter_ctx) == NGX_ERROR) {
         ngx_http_upstream_finalize_request(r, u,
                                            NGX_HTTP_INTERNAL_SERVER_ERROR);
@@ -1685,11 +1710,13 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     n = u->buffer.last - u->buffer.pos;
 
+    // 如果本次还有包体数据   TODO 上面的头部处理会修改u->buffer.last吗  因为头部和包体在用一个buffer中存储
     if (n) {
         u->buffer.last -= n;
 
         u->state->response_length += n;
 
+        // 调用HTTP模块实现的包体处理函数
         if (u->input_filter(u->input_filter_ctx, n) == NGX_ERROR) {
             ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
             return;
@@ -1701,8 +1728,10 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
         }
     }
 
+    // 无需转发响应到上游服务器 这里直接设置以后的读事件函数 因为头已经处理完毕 后面剩余处理包体
     u->read_event_handler = ngx_http_upstream_process_body_in_memory;
 
+    // 直接调用此函数进行读取上游服务器的包体并处理
     ngx_http_upstream_process_body_in_memory(r, u);
 }
 
@@ -2013,18 +2042,21 @@ ngx_http_upstream_process_body_in_memory(ngx_http_request_t *r,
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http upstream process body on memory");
 
+    // 读事件超时 直接结束请求
     if (rev->timedout) {
         ngx_connection_error(c, NGX_ETIMEDOUT, "upstream timed out");
         ngx_http_upstream_finalize_request(r, u, NGX_ETIMEDOUT);
         return;
     }
 
+    // buffer中保存着响应的包体
     b = &u->buffer;
 
     for ( ;; ) {
-
+        // b->end缓冲区结尾  b->last空闲内存起始地址
         size = b->end - b->last;
 
+        // 剩余空闲内存 如果缓冲区全部用尽 则代表缓冲区不足 直接结束请求
         if (size == 0) {
             ngx_log_error(NGX_LOG_ALERT, c->log, 0,
                           "upstream buffer is too small to read response");
@@ -2032,6 +2064,12 @@ ngx_http_upstream_process_body_in_memory(ngx_http_request_t *r,
             return;
         }
 
+        // 调用recv接收上游服务器的数据 这里直接把数据接收到了u->buffer中
+        /*
+            注意 这里只是接收到了u->buffer->last上了(这只是起始地址) 但是没有修改last的位置
+            也就是说如果HTTP模块实现的input_filter没有修改last的位置 那么下次接收数据会继续用以last为起始地址的内存
+            默认的input_filter函数ngx_http_upstream_non_buffered_filter 在函数内部修改了last 加上了接收数据的长度 以便下次recv不覆盖上次接收的包体
+        */
         n = c->recv(c, b->last, size);
 
         if (n == NGX_AGAIN) {
@@ -2045,6 +2083,7 @@ ngx_http_upstream_process_body_in_memory(ngx_http_request_t *r,
 
         u->state->response_length += n;
 
+        // 读取上游服务器的数据 调用HTTP模块的包体处理函数进行处理
         if (u->input_filter(u->input_filter_ctx, n) == NGX_ERROR) {
             ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
             return;
@@ -2055,15 +2094,18 @@ ngx_http_upstream_process_body_in_memory(ngx_http_request_t *r,
         }
     }
 
+    // 继续添加epoll读事件
     if (ngx_handle_read_event(rev, 0) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
         return;
     }
 
     if (rev->active) {
+        // 如果事件还是活跃的 添加读事件定时器
         ngx_add_timer(rev, u->conf->read_timeout);
 
     } else if (rev->timer_set) {
+        // 读事件不活跃 而且添加着定时器 这里直接删除读事件的定时器
         ngx_del_timer(rev);
     }
 }
@@ -2532,6 +2574,10 @@ ngx_http_upstream_non_buffered_filter_init(void *data)
 static ngx_int_t
 ngx_http_upstream_non_buffered_filter(void *data, ssize_t bytes)
 {
+    /*
+        data参数就是ngx_http_upstream_t结构体中的input_filter_ctx
+        当HTTP模块未实现input_filter方法时 input_filter_ctx成员会指向请求的ngx_http_request_t结构体
+    */
     ngx_http_request_t  *r = data;
 
     ngx_buf_t            *b;
@@ -2540,32 +2586,54 @@ ngx_http_upstream_non_buffered_filter(void *data, ssize_t bytes)
 
     u = r->upstream;
 
+    /* 
+        找到out_bufs链表的末尾 其中cl指向链表中最后一个ngx_chain_t元素的next成员
+        所以cl最后一定是NULL空指针 而ll指向最后一个缓冲区的地址 它用来在后面的代码中向out_bufs链表添加新的缓冲区
+    */
     for (cl = u->out_bufs, ll = &u->out_bufs; cl; cl = cl->next) {
         ll = &cl->next;
     }
 
+    /* 
+        free_bufs指向空闲的ngx_buf_t结构体构成的链表 如果free_bufs此时是空的，那么将会重新由r->pool内存池中分配一个ngx_buf_t结构体给cl
+        如果free_bufs链表不为空 则直接由free_bufs中获取一个ngx_buf_t结构体给cl 
+    */
     cl = ngx_chain_get_free_buf(r->pool, &u->free_bufs);
     if (cl == NULL) {
         return NGX_ERROR;
     }
 
+    // 将新分配的ngx_buf_t结构体添加到out_bufs链表的末尾
     *ll = cl;
 
+    // 修改新分配缓冲区的标志位 表明在内存中 flush标志位为可能发送缓冲区到客户端服务
     cl->buf->flush = 1;
     cl->buf->memory = 1;
-
+    
+    // *** buffer缓冲区才是真正接收上游服务器响应包体的缓冲区 bytes字节的包体数据已经在u->buffer的last起始地址上了 ***
     b = &u->buffer;
 
+    // last实际指向本次接收到的包体首地址
     cl->buf->pos = b->last;
+    // last向后移动bytes字节 意味着buffer需要保存这次收到的包体 下次recv在u->buffer的后面内存地址上进行接收
     b->last += bytes;
+    // last和pos成员确定了out_bufs链表中每个缓冲区的包体数据
     cl->buf->last = b->last;
     cl->buf->tag = u->output.tag;
 
+    // 如果没有设置包体长度 u->length就是NGX_MAX_SIZE_T_VALUE 那么到这里结束
     if (u->length == NGX_MAX_SIZE_T_VALUE) {
         return NGX_OK;
     }
 
+    // 更新length 需要接收到的包体长度减少bytes字节
     u->length -= bytes;
+
+    /*
+        可以看到 默认的input_filter方法会试图让独立的buffer缓冲区保存全部的包体
+        这就要求我们对上游服务器的响应包体大小有绝对正确的判断 
+        否则一旦上游服务器发来的响应包体超过buffer缓冲区的大小 请求将会出错
+    */
 
     return NGX_OK;
 }
