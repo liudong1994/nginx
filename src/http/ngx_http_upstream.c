@@ -2315,15 +2315,25 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 #endif
     // buffering为1 上游服务器网速更快 使用更多的缓存以及临时文件存储上游服务器的响应
 
+    // 下面初始化ngx_event_pipt_t结构体 
+    // 注意 这里是直接引用必须分配过内存的pipe指针
     p = u->pipe;
 
+    // 设置向下游客户端发送响应的方法为ngx_http_output_filter
     p->output_filter = (ngx_event_pipe_output_filter_pt) ngx_http_output_filter;
+    // output_ctx指向当前请求的ngx_http_request_t结构体 这是因为接下来转发包体的方法都只接受ngx_event_pipe_t参数 且只能由output_ctx成员获取到表示请求的ngx_http_request_t结构体
     p->output_ctx = r;
+    // 设置转发响应时启用的每个缓冲区的tag标志位
     p->tag = u->output.tag;
+    // bufs指定了内存缓冲区的限制 这里直接使用upstream conf中的配置
     p->bufs = u->conf->bufs;
+    // 设置busy缓冲区中待发送的响应长度触发值
     p->busy_size = u->conf->busy_buffers_size;
+    // upstream在这里被初始化为Nginx与上游服务器之间的连接
     p->upstream = u->peer.connection;
+    // downstream在这里被初始化为Nginx与下游客户端之间的连接
     p->downstream = c;
+    // 初始化用于分配内存缓冲区的内存池
     p->pool = r->pool;
     p->log = c->log;
 
@@ -2349,9 +2359,12 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
                              "to a temporary file";
     }
 
+    // 设置临时存放上游响应的单个缓存文件的最大长度
     p->max_temp_file_size = u->conf->max_temp_file_size;
+    // 设置一次写入文件时写入的最大长度
     p->temp_file_write_size = u->conf->temp_file_write_size;
 
+    // 初始化preread_bufs预读缓冲区链表
     p->preread_bufs = ngx_alloc_chain_link(r->pool);
     if (p->preread_bufs == NULL) {
         ngx_http_upstream_finalize_request(r, u, 0);
@@ -2406,8 +2419,11 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
         p->cyclic_temp_file = 0;
     }
 
+    // 以当前location下的配置来设置读取上游响应的超时时间
     p->read_timeout = u->conf->read_timeout;
+    // 以当前location下的配置来设置发送到下游的超时时间
     p->send_timeout = clcf->send_timeout;
+    // 设置向客户端发送响应时TCP中的send_lowat 水位
     p->send_lowat = clcf->send_lowat;
 
     u->read_event_handler = ngx_http_upstream_process_upstream;
@@ -2486,23 +2502,36 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
     ngx_http_core_loc_conf_t  *clcf;
 
     u = r->upstream;
-    downstream = r->connection;
-    upstream = u->peer.connection;
+    downstream = r->connection;         // r是最原始请求 它的connection是下游客户端的连接
+    upstream = u->peer.connection;      // u是upstream和上游服务器的连接
 
     b = &u->buffer;
 
     /*
         这里的length变量表示还需要接收的上游包体的长度 
         当length为0时 说明不再需要接收上游的响应 那只能继续向下游发送响应 因此do_write只能为1
-        do_write标志位表示本次是否向下游发送响应
+        do_write标志位表示本次是否向下游发送响应 为1时表示向下游发送响应
     */
     do_write = do_write || u->length == 0;
 
     for ( ;; ) {
 
+        // 1.向下游客户端转发响应
         if (do_write) {
 
+            /*
+                检查缓冲区中来自上游服务器的 响应包体数据
+                当对应的HTTP模块没有实现处理包体的input_filter时 会使用默认的函数ngx_http_upstream_non_buffered_filter处理 默认方式就是在out_bufs链表中增加ngx_buf_t缓冲区(但是没有分配实际内存 只是指向buffer缓冲区)
+
+                那么下面的代码为什么还要检查busy_bufs呢
+                因为out_bufs链表中未必可以一次性全部发送完毕 使用busy_bufs指向out_bufs里面的内容 同时将out_bufs置空 用于后面ngx_http_upstream_non_buffered_filter接收上游响应使用
+            */
             if (u->out_bufs || u->busy_bufs) {
+                /*
+                在busy_bufs不为空时 不是也有内容要发送吗
+                注意 busy_bufs指向的是上一次ngx_http_output_filter未发送完的缓存 
+                这时请求ngx_http_request_t结构体中的out缓冲区已经保存了它的内容 不需要再次发送busy_bufs了
+                */
                 rc = ngx_http_output_filter(r, u->out_bufs);
 
                 if (rc == NGX_ERROR) {
@@ -2510,12 +2539,20 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
                     return;
                 }
 
+                /*
+                    更新几个重要的缓冲区
+                    清空out_bufs
+                    将out_bufs中使用完毕ngx_buf_t置空 放到free_bufs中 
+                    如果out_bufs还有未发送完毕的数据 追加到busy_bufs中
+                */
                 ngx_chain_update_chains(&u->free_bufs, &u->busy_bufs,
                                         &u->out_bufs, u->output.tag);
             }
 
+            // 当busy_bufs为空时 表示需要向下游转发的包体都已经发送完毕    TODO
             if (u->busy_bufs == NULL) {
 
+                // u->length表示还需要从上游服务器接收的数据长度 这里为0表示接收完毕
                 if (u->length == 0
                     || upstream->read->eof
                     || upstream->read->error)
@@ -2524,19 +2561,24 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
                     return;
                 }
 
+                // 清空buffer缓冲区 后面继续接收更多的上游服务器数据
                 b->pos = b->start;
                 b->last = b->start;
             }
         }
 
+        // 2.从上游服务器接收数据
+        // 检查buffer缓冲区还有多少可用空间
         size = b->end - b->last;
 
         if (size > u->length) {
             size = u->length;
         }
 
+        // 如果缓冲区仍有可用空间 并且 读事件可读
         if (size && upstream->read->ready) {
 
+            // 从上游服务器接收数据
             n = upstream->recv(upstream, b->last, size);
 
             if (n == NGX_AGAIN) {
@@ -2546,12 +2588,14 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
             if (n > 0) {
                 u->state->response_length += n;
 
+                // 调用HTTP模块或者默认的包体处理函数
                 if (u->input_filter(u->input_filter_ctx, n) == NGX_ERROR) {
                     ngx_http_upstream_finalize_request(r, u, 0);
                     return;
                 }
             }
 
+            // 表示从上游服务器接收到了数据 设置do_write为1 继续向下游客户端转发响应
             do_write = 1;
 
             continue;
@@ -2563,6 +2607,7 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
     if (downstream->data == r) {
+        // downstream是原始请求时 添加下游客户端的写连接到epoll中
         if (ngx_handle_write_event(downstream->write, clcf->send_lowat)
             != NGX_OK)
         {
@@ -2571,6 +2616,7 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
         }
     }
 
+    // 处理下游连接的 定时器
     if (downstream->write->active && !downstream->write->ready) {
         ngx_add_timer(downstream->write, clcf->send_timeout);
 
@@ -2578,11 +2624,13 @@ ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
         ngx_del_timer(downstream->write);
     }
 
+    // 添加与上游服务器之间的读连接到epoll中
     if (ngx_handle_read_event(upstream->read, 0) != NGX_OK) {
         ngx_http_upstream_finalize_request(r, u, 0);
         return;
     }
 
+    // 处理与上游服务器之间连接的 定时器
     if (upstream->read->active && !upstream->read->ready) {
         ngx_add_timer(upstream->read, u->conf->read_timeout);
 
@@ -2687,6 +2735,7 @@ ngx_http_upstream_process_downstream(ngx_http_request_t *r)
 
     if (wev->timedout) {
 
+        // 写事件超时处理
         if (wev->delayed) {
 
             wev->timedout = 0;
@@ -2716,7 +2765,7 @@ ngx_http_upstream_process_downstream(ngx_http_request_t *r)
     } else {
 
         if (wev->delayed) {
-
+            // 需要延迟处理
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
                            "http downstream delayed");
 
@@ -2727,6 +2776,7 @@ ngx_http_upstream_process_downstream(ngx_http_request_t *r)
             return;
         }
 
+        // 调用ngx_event_pipe 第二个参数为1 向下游转发响应
         if (ngx_event_pipe(p, 1) == NGX_ABORT) {
             ngx_http_upstream_finalize_request(r, u, 0);
             return;
@@ -2751,10 +2801,12 @@ ngx_http_upstream_process_upstream(ngx_http_request_t *r,
     c->log->action = "reading upstream";
 
     if (c->read->timedout) {
+        // 读取上游服务器 读事件超时
         u->pipe->upstream_error = 1;
         ngx_connection_error(c, NGX_ETIMEDOUT, "upstream timed out");
 
     } else {
+        // 调用ngx_event_pipe进行读取上游服务器包体 第二个参数为0
         if (ngx_event_pipe(u->pipe, 0) == NGX_ABORT) {
             ngx_http_upstream_finalize_request(r, u, 0);
             return;
