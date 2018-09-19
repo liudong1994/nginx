@@ -480,7 +480,9 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
             return ngx_event_pipe_drain_chains(p);
         }
 
+        // 首先检查与上游服务器之间的连接是否正常
         if (p->upstream_eof || p->upstream_error || p->upstream_done) {
+            // 注：这是与上游服务器连接已经结束 直接把所有响应发送给下游客户端即可
 
             /* pass the p->out and p->in chains to the output filter */
 
@@ -496,6 +498,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
                     cl->buf->recycled = 0;
                 }
 
+                // 调用output_filter向下游客户端发送响应
                 rc = p->output_filter(p->output_ctx, p->out);
 
                 if (rc == NGX_ERROR) {
@@ -514,6 +517,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
                     cl->buf->recycled = 0;
                 }
 
+                // 调用output_filter向下游客户端发送响应
                 rc = p->output_filter(p->output_ctx, p->in);
 
                 if (rc == NGX_ERROR) {
@@ -542,9 +546,12 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
             /* TODO: free unused bufs */
 
             p->downstream_done = 1;
+
+            // 与上游服务器连接已经结束 发送完响应即可break退出
             break;
         }
 
+        // 如果下游客户端写事件没有准备好 或者 需要延迟发送   直接break退出函数
         if (downstream->data != p->output_ctx
             || !downstream->write->ready
             || downstream->write->delayed)
@@ -552,11 +559,14 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
             break;
         }
 
+
+        // 下面就是与上游服务器连接正常（还在接收上游服务器的响应）  如果给下游客户端发送响应的流程
         /* bsize is the size of the busy recycled bufs */
 
         prev = NULL;
         bsize = 0;
 
+        // 计算busy缓冲区中待发送数据的大小
         for (cl = p->busy; cl; cl = cl->next) {
 
             if (cl->buf->recycled) {
@@ -574,6 +584,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
 
         out = NULL;
 
+        // 可以查看p->busy_size的意义 需要先发送busy缓冲区数据
         if (bsize >= (size_t) p->busy_size) {
             flush = 1;
             goto flush;
@@ -590,6 +601,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
                 if (cl->buf->recycled
                     && bsize + cl->buf->last - cl->buf->pos > p->busy_size)
                 {
+                    // 还是会继续判断和p->busy_size的大小 一旦大于busy_size 需要立即发送
                     flush = 1;
                     break;
                 }
@@ -623,6 +635,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
                         }
                     }
 
+                    // 还是会继续判断和p->busy_size的大小 一旦大于busy_size 需要立即发送
                     flush = 1;
                     break;
                 }
@@ -656,6 +669,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
 
         if (out == NULL) {
 
+            // out为空 并且 不需要立即发送  直接break退出函数
             if (!flush) {
                 break;
             }
@@ -666,8 +680,10 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
             }
         }
 
+        // 向下游客户端发送响应
         rc = p->output_filter(p->output_ctx, out);
 
+        // 更新free busy out缓冲区
         ngx_chain_update_chains(&p->free, &p->busy, &out, p->tag);
 
         if (rc == NGX_ERROR) {
@@ -675,6 +691,7 @@ ngx_event_pipe_write_to_downstream(ngx_event_pipe_t *p)
             return ngx_event_pipe_drain_chains(p);
         }
 
+        // 遍历free链表中的缓冲区 释放缓冲区中的shadow域 这样 这些暂不使用的缓冲区才可以继续用来接收新的来自上游服务器的响应
         for (cl = p->free; cl; cl = cl->next) {
 
             if (cl->buf->temp_file) {
