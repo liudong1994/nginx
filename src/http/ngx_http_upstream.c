@@ -3037,6 +3037,11 @@ ngx_http_upstream_next(ngx_http_request_t *r, ngx_http_upstream_t *u,
     if (status) {
         u->state->status = status;
 
+        /*
+            只有向这台上游服务器的重试次数tries减为0时 才会真正地调用ngx_http_upstream_finalize_request方法结束请求 
+            否则会再次试图重新与上游服务器交互 这个功能将帮助感兴趣的HTTP模块实现简单的负载均衡机制
+            u->conf->next_upstream表示的含义实际上是一个32位的错误码组合 表示当出现这些错误码时不能直接结束请求 需要向下一台上游服务器再次重发
+        */
         if (u->peer.tries == 0 || !(u->conf->next_upstream & ft_type)) {
 
 #if (NGX_HTTP_CACHE)
@@ -3063,6 +3068,7 @@ ngx_http_upstream_next(ngx_http_request_t *r, ngx_http_upstream_t *u,
         }
     }
 
+    // 如果与上游间的TCP连接还存在 那么需要关闭
     if (u->peer.connection) {
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                        "close http upstream connection: %d",
@@ -3088,6 +3094,7 @@ ngx_http_upstream_next(ngx_http_request_t *r, ngx_http_upstream_t *u,
     }
 #endif
 
+    // 重新发起连接
     ngx_http_upstream_connect(r, u);
 }
 
@@ -3109,6 +3116,7 @@ ngx_http_upstream_cleanup(void *data)
         u->resolved->ctx = NULL;
     }
 
+    // 最终还是调用ngx_http_upstream_finalize_request方法来结束请求 注意传递的是NGX_DONE参数
     ngx_http_upstream_finalize_request(r, u, NGX_DONE);
 }
 
@@ -3122,17 +3130,20 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "finalize http upstream request: %i", rc);
 
+    // 将cleanup指向的清理资源回调方法置为NULL空指针
     if (u->cleanup) {
         *u->cleanup = NULL;
         u->cleanup = NULL;
     }
 
+    // 释放解析主机域名时分配的资源
     if (u->resolved && u->resolved->ctx) {
         ngx_resolve_name_done(u->resolved->ctx);
         u->resolved->ctx = NULL;
     }
 
     if (u->state && u->state->response_sec) {
+        // 设置当前时间为HTTP响应结束时间
         tp = ngx_timeofday();
         u->state->response_sec = tp->sec - u->state->response_sec;
         u->state->response_msec = tp->msec - u->state->response_msec;
@@ -3141,13 +3152,16 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
             u->state->response_length = u->pipe->read_length;
         }
     }
-
+    
+    // 表示调用HTTP模块负责实现的finalize_request方法   HTTP模块可能会在upstream请求结束时执行一些操作
     u->finalize_request(r, rc);
 
+    // 如果使用了TCP连接池实现了free方法 那么调用free方法（如ngx_http_upstream_free_round_robin_peer）释放连接资源
     if (u->peer.free) {
         u->peer.free(&u->peer, u->peer.data, 0);
     }
 
+    // 如果与上游间的TCP连接还存在 则关闭这个TCP连接
     if (u->peer.connection) {
 
 #if (NGX_HTTP_SSL)
@@ -3186,6 +3200,7 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
     if (u->store && u->pipe && u->pipe->temp_file
         && u->pipe->temp_file->file.fd != NGX_INVALID_FILE)
     {
+        // 如果使用了磁盘文件作为缓存来向下游转发响应 则需要删除用于缓存响应的临时文件
         if (ngx_delete_file(u->pipe->temp_file->file.name.data)
             == NGX_FILE_ERROR)
         {
@@ -3231,6 +3246,10 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
 
     r->connection->log->action = "sending to client";
 
+    /*
+        如果已经向下游客户端发送了HTTP响应头部 却出现了错误
+        那么将会通过下面的ngx_http_send_special(r, NGX_HTTP_LAST)将头部全部发送完毕
+    */
     if (rc == 0
 #if (NGX_HTTP_CACHE)
         && !r->cached
@@ -3240,6 +3259,7 @@ ngx_http_upstream_finalize_request(ngx_http_request_t *r,
         rc = ngx_http_send_special(r, NGX_HTTP_LAST);
     }
 
+    // 最后还是通过调用HTTP框架提供的ngx_http_finalize_request方法来结束请求
     ngx_http_finalize_request(r, rc);
 }
 
