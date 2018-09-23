@@ -1,6 +1,20 @@
 #include "ngx_http_myupstream_module.h"
 
 
+// 与上游服务器进行TCP通信的前缀标志
+#define NGX_MYPROTOCOL_FLAG		        0xe8
+#define NGX_MYPROTOCOL_OK               0
+#define NGX_MYPROTOCOL_ERROR            -1
+#define NGX_MYPROTOCOL_MOREDATA         -2
+#define NGX_MYPROTOCOL_HEADER_LENGTH    sizeof(ngx_http_myprotocol_head_t)
+
+typedef struct {
+    int flag;
+    int length;
+    char body[];
+} ngx_http_myprotocol_head_t;
+
+
 // conf function
 static void* ngx_http_myupstream_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_myupstream_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
@@ -18,6 +32,11 @@ static ngx_int_t ngx_http_myupstream_process_header(ngx_http_request_t *r);
 static void ngx_http_myupstream_finalize_request(ngx_http_request_t *r, ngx_int_t rc);
 static ngx_int_t ngx_http_myupstream_filter_init(void *data);
 static ngx_int_t ngx_http_myupstream_filter(void *data, ssize_t bytes);
+
+
+static ngx_int_t ngx_http_myprotocol_encode(ngx_str_t * data, ngx_pool_t * pool, ngx_buf_t ** buf);
+static ngx_int_t ngx_http_myprotocol_decode(ngx_buf_t * buf);
+
 
 
 // ngx_http_module_t接口
@@ -215,38 +234,163 @@ static ngx_int_t ngx_http_myupstream_handler(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_myupstream_create_request(ngx_http_request_t *r) {
-    // ToDo
+    // 构造发往上游服务器的请求
+    ngx_buf_t                *b = NULL;
+    ngx_chain_t              *cl = NULL;
+
+    cl = ngx_alloc_chain_link(r->pool);
+
+    if (cl == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_int_t rc = ngx_http_myprotocol_encode(&r->args, r->pool, &b);
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[myupstream] args encode ready,rc: %d, will send to backend \"%V\", ori_size: %d, new_size: %d",
+        rc, &r->connection->addr_text, r->args.len, b->last - b->pos);
+
+    cl->buf = b;
+    cl->next = NULL;
+    r->upstream->request_bufs = cl;
+
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[ahstream] plugin request has been ready, will send to backend \"%V\".", &r->connection->addr_text);
 
     return NGX_OK;
 }
 
 static ngx_int_t ngx_http_myupstream_reinit_request(ngx_http_request_t *r) {
     // ToDo
+    // 出现错误后重新初始化HTTP请求 暂不实现
 
     return NGX_OK;
 }
 
 static ngx_int_t ngx_http_myupstream_process_header(ngx_http_request_t *r) {
-    // ToDo
+    // 上游服务器包头处理函数 只需要解析出包头中长度参数即可（包体长度）
+    ngx_http_upstream_t *u = r->upstream;
+    int length = ngx_http_myprotocol_decode(&(u->buffer));
 
+    if (length < 0) {
+        if (length == NGX_MYPROTOCOL_ERROR) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "head flag error.");
+        }
+        else if (length == NGX_MYPROTOCOL_MOREDATA) {
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[myupstream] recieve response NOT complete, recieve again. length now: %d", u->buffer.last - u->buffer.pos);
+            return NGX_AGAIN;
+        }
+        return NGX_ERROR;
+    }
+
+    u->headers_in.content_length_n = length;
+
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "[myupstream] process header succes, body length: %d", length, &r->connection->addr_text);
     return NGX_OK;
 }
 
 static void ngx_http_myupstream_finalize_request(ngx_http_request_t *r, ngx_int_t rc) {
-    // ToDo
+    ngx_http_upstream_t *u = r->upstream;
+
+    if (rc == 0) {
+        u->state->status = NGX_HTTP_OK;
+    }
 
     return ;
 }
 
 static ngx_int_t ngx_http_myupstream_filter_init(void *data) {
-    // ToDo
+    ngx_http_request_t  *r = data;
+    ngx_http_upstream_t *u = r->upstream;
+
+    u->length = u->headers_in.content_length_n;
 
     return NGX_OK;
 }
 
 static ngx_int_t ngx_http_myupstream_filter(void *data, ssize_t bytes) {
-    // ToDo
+    // 上游服务返回的包体 处理函数
+    ngx_http_request_t   *r = data;
+    ngx_chain_t          *cl, **ll;
+
+    ngx_http_upstream_t  *u = r->upstream;
+
+    for (cl = u->out_bufs, ll = &u->out_bufs; cl; cl = cl->next) {
+        ll = &cl->next;
+    }
+
+    cl = ngx_chain_get_free_buf(r->pool, &u->free_bufs);
+    if (cl == NULL) {
+        return NGX_ERROR;
+    }
+
+    *ll = cl;
+
+    cl->buf->flush = 1;
+    cl->buf->memory = 1;
+
+    ngx_buf_t *b = &u->buffer;
+
+    cl->buf->pos = b->last;
+    b->last += bytes;
+    cl->buf->last = b->last;
+    cl->buf->tag = u->output.tag;
+
+    u->length -= bytes;
+
+    if (u->length == 0) {
+        u->keepalive = 1;
+        return NGX_OK;
+    }
 
     return NGX_OK;
+}
+
+static ngx_int_t ngx_http_myprotocol_encode(ngx_str_t * data, ngx_pool_t * pool, ngx_buf_t ** buf)
+{
+    if (data == NULL || pool == NULL || buf == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_int_t len = NGX_MYPROTOCOL_HEADER_LENGTH + data->len;
+    *buf = ngx_create_temp_buf(pool, len);
+
+    if (*buf == NULL) {
+        return NGX_ERROR;
+    }
+
+    /* encode request header */
+    ngx_http_myprotocol_head_t head;
+    head.flag = NGX_MYPROTOCOL_FLAG;
+    head.length = htonl(data->len);
+    (*buf)->last = ngx_copy((*buf)->last, (u_char*)&head, NGX_MYPROTOCOL_HEADER_LENGTH);
+    /* encode request body */
+    (*buf)->last = ngx_copy((*buf)->last, data->data, data->len);
+
+    return NGX_MYPROTOCOL_OK;
+}
+
+static ngx_int_t ngx_http_myprotocol_decode(ngx_buf_t * buf)
+{
+    if (buf == NULL) {
+        return NGX_ERROR;
+    }
+
+    size_t dataLen = buf->last - buf->pos;
+
+    if (dataLen < NGX_MYPROTOCOL_HEADER_LENGTH) {
+        return NGX_MYPROTOCOL_MOREDATA;
+    }
+
+    ngx_http_myprotocol_head_t * pstHead = (ngx_http_myprotocol_head_t*)buf->pos;
+
+    if ((int)NGX_MYPROTOCOL_FLAG != pstHead->flag) {
+        return NGX_MYPROTOCOL_ERROR;
+    }
+
+    size_t bodyLen = ntohl(pstHead->length);
+    if (bodyLen > dataLen - NGX_MYPROTOCOL_HEADER_LENGTH) {
+        return NGX_MYPROTOCOL_MOREDATA;
+    }
+
+    buf->pos += NGX_MYPROTOCOL_HEADER_LENGTH;
+    return bodyLen;
 }
 
