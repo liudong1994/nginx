@@ -390,7 +390,7 @@ ngx_conf_handler(ngx_conf_t *cf, ngx_int_t last)
                 下面的三种查找配置的方式
                 1.NGX_DIRECT_CONF
                     指定配置存储
-                2.!NGX_DIRECT_CONF NAX_MAIN_CONF
+                2.NGX_MAIN_CONF（!NGX_DIRECT_CONF）
                     查找配置存储的地址，目前有 events/http/mail/imap  这四个指令都是使用上下文main块指令  并且块中的指令都使用其他类型的模块（分别是event模块、http模块、mail模块和mail模块）来处理
                 3.其他
                     除开core模块，都是此种方式。根据cmd->conf位置取出cf->ctx中的配置，然后在取出的配置中在查找到当前模块对应的配置
