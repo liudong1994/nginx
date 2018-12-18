@@ -163,9 +163,10 @@ typedef char *(*ngx_conf_handler_pt)(ngx_conf_t *cf,
     ngx_command_t *dummy, void *conf);
 
 
+// 解析配置的结构体
 struct ngx_conf_s {
-    char                 *name;
-    ngx_array_t          *args;
+    char                 *name;         // 
+    ngx_array_t          *args;         // 存储 解析出的配置参数数组
 
     ngx_cycle_t          *cycle;
     ngx_pool_t           *pool;

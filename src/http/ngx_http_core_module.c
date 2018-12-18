@@ -2732,7 +2732,7 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     cscf = ctx->srv_conf[ngx_http_core_module.ctx_index];
     cscf->ctx = ctx;
 
-    //获取ngx_http_core_module的main_conf级别配置项
+    //获取ngx_http_core_module的main_conf级别配置项（由于是server块解析 获取的就是ngx_http_module的main_conf配置）
     cmcf = ctx->main_conf[ngx_http_core_module.ctx_index];
 
     //获取一个server块位置(其实就是将当前server块添加到ngx_http_core_main_conf_t的数组中去)
@@ -2750,11 +2750,13 @@ ngx_http_core_server(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     cf->ctx = ctx;
     cf->cmd_type = NGX_HTTP_SRV_CONF;
 
+    // 遇到server块配置文件 继续解析server块下的配置（如location等配置）
     rv = ngx_conf_parse(cf, NULL);
 
     *cf = pcf;
 
     if (rv == NGX_CONF_OK && !cscf->listen) {
+        // server块没有监听端口 设置默认监听端口
         ngx_memzero(&lsopt, sizeof(ngx_http_listen_opt_t));
 
         sin = &lsopt.u.sockaddr_in;

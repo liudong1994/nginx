@@ -331,7 +331,11 @@ main(int argc, char *const *argv)
         ngx_modules[i]->index = ngx_max_module++;
     }
 
-    //做了很多操作
+    /*
+        解析配置 初始化cycle核心结构体
+        创建核心模块配置并初始化
+        对所有模块进行初始化
+    */
     cycle = ngx_init_cycle(&init_cycle);
     if (cycle == NULL) {
         if (ngx_test_config) {

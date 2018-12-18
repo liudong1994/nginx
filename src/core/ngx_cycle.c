@@ -184,7 +184,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
 
     ngx_queue_init(&cycle->reusable_connections_queue);
 
-
+    // 创建全局 存储核心模块配置的数组
     cycle->conf_ctx = ngx_pcalloc(pool, ngx_max_module * sizeof(void *));
     if (cycle->conf_ctx == NULL) {
         ngx_destroy_pool(pool);
@@ -219,6 +219,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
 
         module = ngx_modules[i]->ctx;
 
+        // 调用所有核心模块 创建对应配置结构体
         if (module->create_conf) {
             rv = module->create_conf(cycle);
             if (rv == NULL) {
@@ -252,19 +253,21 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
     conf.cycle = cycle;
     conf.pool = pool;
     conf.log = log;
-    conf.module_type = NGX_CORE_MODULE;
+    conf.module_type = NGX_CORE_MODULE;     // 与解析配置时的模块做对应
     conf.cmd_type = NGX_MAIN_CONF;
 
 #if 0
     log->log_level = NGX_LOG_DEBUG_ALL;
 #endif
 
+    // -g参数解析函数 可以忽略
     if (ngx_conf_param(&conf) != NGX_CONF_OK) {
         environ = senv;
         ngx_destroy_cycle_pools(&conf);
         return NULL;
     }
 
+    // 配置文件解析
     if (ngx_conf_parse(&conf, &cycle->conf_file) != NGX_CONF_OK) {
         environ = senv;
         ngx_destroy_cycle_pools(&conf);
@@ -276,6 +279,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
                        cycle->conf_file.data);
     }
 
+    // 配置文件解析完毕 初始化所有核心模块配置
     for (i = 0; ngx_modules[i]; i++) {
         if (ngx_modules[i]->type != NGX_CORE_MODULE) {
             continue;

@@ -165,6 +165,7 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
         type = parse_block;
 
     } else {
+        // nginx启动时带有-g参数 解析
         type = parse_param;
     }
 
@@ -247,7 +248,7 @@ ngx_conf_parse(ngx_conf_t *cf, ngx_str_t *filename)
             goto failed;
         }
 
-
+        // 遍历所有模块commands数组 找到对应的指令 调用set函数
         rc = ngx_conf_handler(cf, rc);
 
         if (rc == NGX_ERROR) {
@@ -297,6 +298,7 @@ ngx_conf_handler(ngx_conf_t *cf, ngx_int_t last)
 
     multi = 0;
 
+    // 遍历所有模块 执行解析出的配置项
     for (i = 0; ngx_modules[i]; i++) {
 
         /* look up the directive in the appropriate modules */
@@ -384,18 +386,52 @@ ngx_conf_handler(ngx_conf_t *cf, ngx_int_t last)
 
             conf = NULL;
 
+            /*
+                下面的三种查找配置的方式
+                1.NGX_DIRECT_CONF
+                    指定配置存储
+                2.!NGX_DIRECT_CONF NAX_MAIN_CONF
+                    查找配置存储的地址，目前有 events/http/mail/imap  这四个指令都是使用上下文main块指令  并且块中的指令都使用其他类型的模块（分别是event模块、http模块、mail模块和mail模块）来处理
+                3.其他
+                    除开core模块，都是此种方式。根据cmd->conf位置取出cf->ctx中的配置，然后在取出的配置中在查找到当前模块对应的配置
+            */
+
+
             if (cmd->type & NGX_DIRECT_CONF) {
+                // NGX_DIRECT_CONF只用于core模块 用于找到对应模块的配置结构体（core模块create_conf的返回）
                 conf = ((void **) cf->ctx)[ngx_modules[i]->index];
 
             } else if (cmd->type & NGX_MAIN_CONF) {
+                // 不是NGX_DIRECT_CONF却是NGX_MAIN_CONF 说明需要在配置中创建自己模块的上下文（也就是需要进入二级模块）
+                /*
+                    其实就是在一级模块中需要进入二级模块的情况（如在ngx_http_module中需要创建ngx_http_conf_ctx_t结构体）
+                    这种情况只有ngx_errlog_module/ngx_events_module/ngx_http_module/ngx_mail_module模块  
+                    这些核心模块没有实现create_conf函数 而是在指令对应的set函数中创建对应的结构体
+                */
                 conf = &(((void **) cf->ctx)[ngx_modules[i]->index]);
 
             } else if (cf->ctx) {
+                /* 
+                    真正的****conf_ctx
+                    针对http模块就是  cf->ctx == conf_ctx[ngx_http_***_module]
+                                     cmd_conf == MAIN/SRV/LOC_CONF_OFFSET
+                    cf->ctx + cmd_conf == ngx_http_conf_ctx_t中的main/srv/loc_conf
+                    confp[ngx_modules[i]->ctx_index] == main/srv/loc中HTTP指令对应模块的配置
+                */
+
+                // 进入二级模块处理
+                // 取得一级模块对应的二级模块上下文
                 confp = *(void **) ((char *) cf->ctx + cmd->conf);
 
                 if (confp) {
+                    // 取出二级模块上下文中对应的配置conf
                     conf = confp[ngx_modules[i]->ctx_index];
                 }
+                /*
+                    为什么要有四级指针 这个其实是和模块级别相关的 如果只有一级模块 那么只需要2级指针就够了
+                    现在还有2级模块 那么每个1级模块的2级指针里面必须得扩展指针以保存本级别模块的上下文 那么自然就是4级指针了
+                    详细可以看看event模块
+                */
             }
 
             rv = cmd->set(cf, cmd, conf);
@@ -450,16 +486,17 @@ ngx_conf_read_token(ngx_conf_t *cf)
     ngx_str_t   *word;
     ngx_buf_t   *b;
 
-    found = 0;
-    need_space = 0;
-    last_space = 1;
-    sharp_comment = 0;
-    variable = 0;
-    quoted = 0;
-    s_quoted = 0;
-    d_quoted = 0;
+    found = 0;              // 是否找到一个token
+    need_space = 0;         // 标志位 表示此时需要一个token分隔符 一般刚刚解析完一对双引号或者单引号 设置need_space为1 表示期待下一个字符为分隔符
 
-    cf->args->nelts = 0;
+    last_space = 1;         // 标志位 表示上一个字符为token分隔符
+    sharp_comment = 0;      // 注释(#)
+    variable = 0;           // 遇到字符$ 表示一个变量
+    quoted = 0;             // 标志位 表示上一个字符为反引号
+    s_quoted = 0;           // 标志位 表示已扫描一个双引号 期待另一个双引号
+    d_quoted = 0;           // 标志位 表示已扫描一个单引号 期待另一个单引号
+
+    cf->args->nelts = 0;    // 当前解析出的token个数
     b = cf->conf_file->buffer;
     start = b->pos;
     start_line = cf->conf_file->line;
@@ -487,6 +524,7 @@ ngx_conf_read_token(ngx_conf_t *cf)
                     return NGX_ERROR;
                 }
 
+                // 配置读取完毕
                 return NGX_CONF_FILE_DONE;
             }
 
@@ -686,6 +724,7 @@ ngx_conf_read_token(ngx_conf_t *cf)
             }
 
             if (found) {
+                // 找到一个token 放入cf->args数组中
                 word = ngx_array_push(cf->args);
                 if (word == NULL) {
                     return NGX_ERROR;

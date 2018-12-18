@@ -134,7 +134,8 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-    *(ngx_http_conf_ctx_t **) conf = ctx;
+    // 将ctx设置存储在ngx_http_module核心模块中（ngx_cycle_t::conf_ctx中）
+    *(ngx_http_conf_ctx_t **) conf = ctx;       // 在ngx_http_module_ctx中没有实现create_conf创建配置结构的函数
 
 
     /* count the number of the http modules and set up their indices */
@@ -215,7 +216,10 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         }
     }
 
+    // 暂存ngx_conf_t配置数据
     pcf = *cf;
+
+    // 设置临时的ngx_conf_t配置数据  开始解析http{...}数据
     cf->ctx = ctx;
 
     for (m = 0; ngx_modules[m]; m++) {
@@ -236,7 +240,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     cf->module_type = NGX_HTTP_MODULE;
     cf->cmd_type = NGX_HTTP_MAIN_CONF;
-    rv = ngx_conf_parse(cf, NULL);
+    rv = ngx_conf_parse(cf, NULL);          // 开始解析http{...}块内的所有配置项
 
     if (rv != NGX_CONF_OK) {
         goto failed;
@@ -348,6 +352,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
 failed:
 
+    // 还原初始的ngx_conf_t配置
     *cf = pcf;
 
     return rv;
